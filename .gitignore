@@ -1,0 +1,38 @@
+# System
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+
+# Project Data & Artifacts (Too large for git)
+data/
+checkpoints/
+*.usearch
+*.parquet
+*.pt
+*.bin
+training_log.csv
+index_run.log
+monitor.log
+
+# Temporary
+tmp/
