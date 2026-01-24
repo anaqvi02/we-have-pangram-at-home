@@ -37,7 +37,7 @@ class Config:
     AI_DATASET_PATH = DATA_DIR / "ai_corpus"
     
     # Checkpoints (Custom Mount)
-    CHECKPOINT_DIR = Path("/mnt/weights")
+    CHECKPOINT_DIR = Path("/mnt/weightsandotherstuff")
     
     @staticmethod
     def print_hardware_status():

@@ -7,7 +7,7 @@ def main():
     parser.add_argument("--index_path", type=str, default=str(Config.INDEX_PATH))
     parser.add_argument("--human_data_dir", type=str, default=str(Config.HUMAN_DATASET_PATH))
     parser.add_argument("--ai_data_dir", type=str, default=str(Config.AI_DATASET_PATH))
-    parser.add_argument("--output_dir", type=str, default=str(Config.PROJECT_ROOT / "checkpoints" / "pangram_m3"))
+    parser.add_argument("--output_dir", type=str, default=str(Config.CHECKPOINT_DIR / "pangram_final"))
     parser.add_argument("--epochs", type=int, default=Config.NUM_EPOCHS, help="Number of training epochs")
     parser.add_argument("--use_mock_data", action="store_true", help="Use generated dummy data")
     args = parser.parse_args()

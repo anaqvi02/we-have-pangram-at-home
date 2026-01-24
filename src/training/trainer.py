@@ -115,7 +115,8 @@ class PangramTrainer:
                 if val_loss < best_val_loss:
                     print(f"New Best Model! (Loss: {val_loss:.4f})")
                     best_val_loss = val_loss
-                    best_dir = Config.PROJECT_ROOT / "checkpoints" / "pangram_best"
+                    best_dir = Config.CHECKPOINT_DIR / "pangram_best"
+                    best_dir.mkdir(parents=True, exist_ok=True)
                     self.model.save_pretrained(best_dir)
                     self.tokenizer.save_pretrained(best_dir)
 
@@ -190,13 +191,15 @@ class PangramTrainer:
                 print("Warning: Dataset augmentation not supported for this type.")
             
             # --- Auto-Save Checkpoint ---
-            checkpoint_dir = Config.PROJECT_ROOT / "checkpoints" / f"pangram_epoch_{epoch+1}"
+            checkpoint_dir = Config.CHECKPOINT_DIR / f"pangram_epoch_{epoch+1}"
             print(f"Auto-saving checkpoint to {checkpoint_dir}...")
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(checkpoint_dir)
             self.tokenizer.save_pretrained(checkpoint_dir)
             
             # Also update 'latest'
-            latest_dir = Config.PROJECT_ROOT / "checkpoints" / "pangram_latest"
+            latest_dir = Config.CHECKPOINT_DIR / "pangram_latest"
+            latest_dir.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(latest_dir)
             self.tokenizer.save_pretrained(latest_dir)
             print("Checkpoint saved.")
