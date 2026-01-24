@@ -145,14 +145,21 @@ def download_c4_realnewslike(output_dir=None, limit=1000000, batch_size=100000):
     except Exception as e:
         print(f"Failed to download C4: {e}")
 
+import argparse
+
 def main():
+    parser = argparse.ArgumentParser(description="Download AI and Human datasets")
+    parser.add_argument("--limit", type=int, default=1000000, help="Number of samples to download")
+    parser.add_argument("--batch_size", type=int, default=100000, help="Batch size for parquet writing")
+    args = parser.parse_args()
+
     ensure_dirs()
     
     # 1. AI Corpus
-    download_wildchat(limit=1000000, batch_size=100000) 
+    download_wildchat(limit=args.limit, batch_size=args.batch_size) 
     
     # 2. Human Corpus
-    download_c4_realnewslike(limit=1000000, batch_size=100000)
+    download_c4_realnewslike(limit=args.limit, batch_size=args.batch_size)
     
     print("\n--- Download Complete ---")
     print(f"AI Data: {AI_DIR}")
