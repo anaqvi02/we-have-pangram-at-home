@@ -154,16 +154,13 @@ def download_c4_realnewslike(output_dir=None, limit=1000000, batch_size=100000):
 
 import argparse
 
-def download_pangram_style(limit=1000000, batch_size=100000):
+def download_high_quality(limit=1000000, batch_size=100000):
     """
-    Downloads a 'Pangram-Style' mix focused on Formal Writing:
-    1. Student Essays & Creative (Artem9k) - 40%
-    2. Formal Literature (Gutenberg) - 30%
-    3. Encyclopedic/Formal (Wikipedia) - 30%
-    
-    This heavily upweights formal/academic writing styles as requested.
+    Downloads the high-quality mix requested:
+    1. AI: LMSYS Chat-1M (Real user/AI chats) + Cosmopedia (Synthetic Textbooks)
+    2. Human: FineWeb-Edu (High quality educational web text)
     """
-    print(f"--- Downloading Pangram-Style Mix (Limit: {limit}) ---")
+    print(f"--- Downloading High-Quality Mix (Limit: {limit}) ---")
     
     # Clean existing
     for d in [AI_DIR, HUMAN_DIR]:
@@ -171,99 +168,82 @@ def download_pangram_style(limit=1000000, batch_size=100000):
             f.unlink()
             
     try:
-        # Stream 1: Essays/Creative
-        print("-> Stream 1: Student Essays (Artem9k)...")
-        ds_essays = load_dataset("artem9k/ai-text-detection-pile", split="train", streaming=True)
+        # --- AI Sources ---
+        print("-> Stream 1 (AI): LMSYS Chat-1M (Real Chats)...")
+        ds_lmsys = load_dataset("lmsys/lmsys-chat-1m", split="train", streaming=True)
         
-        # Stream 2: Books
-        print("-> Stream 2: Formal Literature (Gutenberg)...")
-        ds_books = load_dataset("sedthh/gutenberg_english", split="train", streaming=True)
-        iter_books = iter(ds_books)
+        print("-> Stream 2 (AI): Cosmopedia (Synthetic Textbooks)...")
+        # We mix stories (creative) and auto_math_text (formal)
+        ds_cosmo1 = load_dataset("HuggingFaceTB/cosmopedia", "stories", split="train", streaming=True)
+        ds_cosmo2 = load_dataset("HuggingFaceTB/cosmopedia", "auto_math_text", split="train", streaming=True)
+        iter_cosmo = iter(ds_cosmo1) # Start with stories, could alternate ideally
         
-        # Stream 3: Wikipedia
-        print("-> Stream 3: Encyclopedic (Wikipedia)...")
-        ds_wiki = load_dataset("wikipedia", "20220301.en", split="train", streaming=True)
-        iter_wiki = iter(ds_wiki)
+        # --- Human Source ---
+        print("-> Stream 3 (Human): FineWeb-Edu (Web Text)...")
+        ds_fineweb = load_dataset("HuggingFaceFW/fineweb-edu", "sample-10BT", split="train", streaming=True)
         
         ai_batch, human_batch = [], []
         ai_idx, human_idx = 0, 0
         ai_count, human_count = 0, 0
         
-        # 50/50 Split AI vs Human
-        class_limit = limit 
+        # Ratios
+        class_limit = limit
         
-        # Human Mix Ratios
-        limit_essays = int(class_limit * 0.4)
-        limit_books = int(class_limit * 0.3)
-        limit_wiki = class_limit - limit_essays - limit_books
+        # AI Mix: 50% KMSYS (Real), 50% Cosmopedia (High Quality Synthetic)
+        limit_lmsys = int(class_limit * 0.5)
+        limit_cosmo = class_limit - limit_lmsys
         
-        pbar = tqdm(total=limit*2, desc="Mixing Formal Data")
+        pbar = tqdm(total=limit*2, desc="Mixing High-Quality Data")
         
-        # 1. Main Loop (Essays + AI)
-        for sample in ds_essays:
-            if ai_count >= class_limit and human_count >= limit_essays:
-                break
-                
-            text = sample['text']
-            label = sample['generated'] # 1=AI, 0=Human
+        # 1. Process LMSYS (AI Part 1)
+        for sample in ds_lmsys:
+            if ai_count >= limit_lmsys: break
             
-            if not text or len(text.split()) < 50: continue
-
-            if label == 1:
-                if ai_count < class_limit:
-                    ai_batch.append({'text': text, 'source': 'essay_daigt_ai', 'label': 1})
-                    ai_count += 1
-                    pbar.update(1)
-            else:
-                if human_count < limit_essays:
-                    human_batch.append({'text': text, 'source': 'essay_daigt_human', 'label': 0})
-                    human_count += 1
-                    pbar.update(1)
-            
-            # Flush
-            if len(ai_batch) >= batch_size:
-                pd.DataFrame(ai_batch).to_parquet(AI_DIR / f"part_{ai_idx}.parquet")
-                del ai_batch[:]
-                gc.collect()
-                ai_idx += 1
-            if len(human_batch) >= batch_size:
-                pd.DataFrame(human_batch).to_parquet(HUMAN_DIR / f"part_{human_idx}.parquet")
-                del human_batch[:]
-                gc.collect()
-                human_idx += 1
-
-        # 2. Fill Books
-        print("-> Mixing in Gutenberg...")
+            conv = sample.get('conversation', [])
+            for turn in conv:
+                if turn['role'] == 'assistant':
+                    text = turn['content']
+                    if text and len(text.split()) > 50:
+                        ai_batch.append({'text': text, 'source': 'lmsys', 'label': 1})
+                        ai_count += 1
+                        pbar.update(1)
+                        if len(ai_batch) >= batch_size:
+                            pd.DataFrame(ai_batch).to_parquet(AI_DIR / f"part_{ai_idx}.parquet")
+                            del ai_batch[:]
+                            gc.collect()
+                            ai_idx += 1
+                        break # One turn per convo to avoid correlation
+        
+        # 2. Process Cosmopedia (AI Part 2)
         added = 0
-        for sample in iter_books:
-            if added >= limit_books: break
-            text = sample.get('text', '')
-            words = text.split()
-            if len(words) < 200: continue
-            snippet = " ".join(words[:1000]) # Essay-sized chunk
-            
-            human_batch.append({'text': snippet, 'source': 'gutenberg', 'label': 0})
-            human_count += 1
-            added += 1
-            pbar.update(1)
-            
-            if len(human_batch) >= batch_size:
-                pd.DataFrame(human_batch).to_parquet(HUMAN_DIR / f"part_{human_idx}.parquet")
-                del human_batch[:]
-                gc.collect()
-                human_idx += 1
+        try:
+            for sample in iter_cosmo:
+                if added >= limit_cosmo: break
+                text = sample.get('text', '')
+                if len(text.split()) < 50: continue
                 
-        # 3. Fill Wikipedia
-        print("-> Mixing in Wikipedia...")
-        added = 0
-        for sample in iter_wiki:
-            if added >= limit_wiki: break
+                ai_batch.append({'text': text, 'source': 'cosmopedia', 'label': 1})
+                ai_count += 1
+                added += 1
+                pbar.update(1)
+                
+                if len(ai_batch) >= batch_size:
+                    pd.DataFrame(ai_batch).to_parquet(AI_DIR / f"part_{ai_idx}.parquet")
+                    del ai_batch[:]
+                    gc.collect()
+                    ai_idx += 1
+        except Exception as e:
+            print(f"Cosmopedia stream empty? {e}")
+
+        # 3. Process FineWeb-Edu (Human)
+        for sample in ds_fineweb:
+            if human_count >= class_limit: break
+            
             text = sample.get('text', '')
             if len(text.split()) < 50: continue
             
-            human_batch.append({'text': text, 'source': 'wikipedia', 'label': 0})
+            human_batch.append({'text': text, 'source': 'fineweb_edu', 'label': 0})
             human_count += 1
-            added += 1
             pbar.update(1)
             
             if len(human_batch) >= batch_size:
@@ -279,22 +259,24 @@ def download_pangram_style(limit=1000000, batch_size=100000):
             pd.DataFrame(human_batch).to_parquet(HUMAN_DIR / f"part_{human_idx}.parquet")
             
         pbar.close()
-        print(f"Pangram-Mix Complete. AI: {ai_count}, Human: {human_count}")
+        print(f"High-Quality Mix Complete. AI: {ai_count}, Human: {human_count}")
 
     except Exception as e:
-        print(f"Failed to download Pangram Mix: {e}")
+        print(f"Failed to download High-Quality Mix: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Download AI and Human datasets")
     parser.add_argument("--limit", type=int, default=1000000, help="Number of samples to download")
     parser.add_argument("--batch_size", type=int, default=100000, help="Batch size for parquet writing")
-    parser.add_argument("--mode", type=str, default="general", choices=["general", "essays"], help="Dataset mode: 'general' (WildChat/C4) or 'essays' (Pangram Mix: DAIGT+Gutenberg)")
+    parser.add_argument("--mode", type=str, default="general", choices=["general", "essays", "high_quality"], help="Dataset mode: 'general', 'essays', or 'high_quality' (LMSYS+Cosmo+FineWeb)")
     args = parser.parse_args()
 
     ensure_dirs()
     
     if args.mode == "essays":
         download_pangram_style(limit=args.limit, batch_size=args.batch_size)
+    elif args.mode == "high_quality":
+        download_high_quality(limit=args.limit, batch_size=args.batch_size)
     else:
         # 1. AI Corpus
         download_wildchat(limit=args.limit, batch_size=args.batch_size) 
