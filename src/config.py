@@ -5,7 +5,8 @@ from pathlib import Path
 class Config:
     # Paths
     PROJECT_ROOT = Path(__file__).parent.parent
-    DATA_DIR = PROJECT_ROOT / "data"
+    # User requested custom data mount
+    DATA_DIR = Path("/mnt/dataset")
     SCRIPTS_DIR = PROJECT_ROOT / "scripts"
     
     # Model Architecture
