@@ -47,10 +47,19 @@ def main():
     total_indexed = 0
     
     from tqdm import tqdm
-    # We don't know exact length in streaming mode easily without metadata, 
-    # but we can just use progress bar updates.
-    
-    for sample in tqdm(dataset, desc="Indexing"):
+    # Calculate estimated total for progress bar
+    # 1. Count partition files
+    partition_files = list(ai_data_path.glob("part_*.parquet"))
+    # 2. Assume roughly 100k per file (based on download script)
+    # If no partitions found (legacy single file), assume 1M default or try to read metadata (expensive)
+    if partition_files:
+        estimated_total = len(partition_files) * 100000
+    else:
+        estimated_total = 1000000 # Fallback default
+        
+    print(f"Estimated Total Samples: {estimated_total}")
+
+    for sample in tqdm(dataset, desc="Indexing", total=estimated_total):
         text = sample['text']
         batch_texts.append(text)
         
