@@ -285,8 +285,8 @@ def main():
         download_c4_realnewslike(limit=args.limit, batch_size=args.batch_size)
     
     print("\n--- Download Complete ---")
-    print(f"AI Data: {AI_DIR}")
-    print(f"Human Data: {HUMAN_DIR}")
+    print(f"AI Data: {AI_DIR.resolve()}")
+    print(f"Human Data: {HUMAN_DIR.resolve()}")
 
 if __name__ == "__main__":
     main()
