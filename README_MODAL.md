@@ -1,6 +1,6 @@
 # Running on Modal.com
 
-This project supports serverless execution on [Modal](https://modal.com) for faster training (using NVIDIA A10G GPUs) and persistent storage.
+This project supports serverless execution on [Modal](https://modal.com) for faster training (using NVIDIA T4 GPUs) and persistent storage.
 
 ## Setup
 
@@ -27,7 +27,7 @@ modal run src/modal_app.py --action index
 *Note: This data is stored in a distributed Volume named `pangram-data`.*
 
 ### 2. Train Model
-Runs the training loop on an NVIDIA A10G GPU.
+Runs the training loop on an NVIDIA T4 GPU (Budget Optimized).
 
 ```bash
 modal run src/modal_app.py --action train
