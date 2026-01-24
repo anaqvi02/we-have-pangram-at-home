@@ -24,7 +24,7 @@ dist/
 .idea/
 
 # Project Data & Artifacts (Too large for git)
-data/
+/data/
 checkpoints/
 *.usearch
 *.parquet
