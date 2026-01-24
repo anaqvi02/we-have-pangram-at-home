@@ -54,12 +54,12 @@ def train_pipeline(
         
         # 1. Load Human Data
         print(f"Loading Human Corpus from {human_data_path}...")
-        human_files = str(human_data_path / "*.parquet")
+        human_files = str(human_data_path / "part_*.parquet")
         human_ds = load_dataset("parquet", data_files=human_files, split="train")
         
         # 2. Load AI Data
         print(f"Loading AI Corpus from {ai_data_path}...")
-        ai_files = str(ai_data_path / "*.parquet")
+        ai_files = str(ai_data_path / "part_*.parquet")
         ai_ds = load_dataset("parquet", data_files=ai_files, split="train")
         
         # 3. Validation Set (Held Out - 2k samples)

@@ -17,3 +17,7 @@ pandas
 scikit-learn
 pyarrow
 numpy<2
+
+# Dashboard
+streamlit
+plotly

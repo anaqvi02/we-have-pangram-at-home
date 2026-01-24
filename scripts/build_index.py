@@ -30,13 +30,13 @@ def main():
     print(f"Loading AI Corpus from {ai_data_path}...")
     
     # Updated: Load from directory of partitioned parquets using streaming
-    ai_files = str(ai_data_path / "wildchat_part_*.parquet")
+    ai_files = str(ai_data_path / "part_*.parquet")
     try:
         dataset = load_dataset("parquet", data_files=ai_files, split="train", streaming=True)
     except Exception as e:
         print(f"Error loading dataset: {e}")
         # Fallback to single file if parts fail (legacy support)
-        legacy_file = str(ai_data_path / "wildchat.parquet")
+        legacy_file = str(ai_data_path / "part_0.parquet")
         dataset = load_dataset("parquet", data_files=legacy_file, split="train", streaming=True)
 
     print(f"Indexing stream...")
