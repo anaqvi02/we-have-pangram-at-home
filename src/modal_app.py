@@ -74,7 +74,7 @@ def build_index():
     volume.commit()
     print("--- Index Build Complete & Committed ---")
 
-@app.function(image=image, volumes={DATA_ROOT: volume}, gpu="T4", timeout=7200)
+@app.function(image=image, volumes={DATA_ROOT: volume}, gpu="A10G", timeout=7200)
 def train():
     from src.train_lib import train_pipeline
     

@@ -9,7 +9,7 @@ class Config:
     SCRIPTS_DIR = PROJECT_ROOT / "scripts"
     
     # Model Architecture
-    MODEL_NAME = "microsoft/deberta-v3-base"
+    MODEL_NAME = "microsoft/deberta-v3-large"
     MAX_LENGTH = 512  # Token limit
     
     # Hardware / Device
@@ -20,9 +20,10 @@ class Config:
         DEVICE = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
     
     # Training Hyperparameters
-    BATCH_SIZE = 8  # Adjusted for M3 Air/Pro memory limits
-    GRAD_ACCUMULATION = 4 # 8 * 4 = 32 effective batch size
-    LEARNING_RATE = 2e-5
+    # High-Performance Settings for Large Model
+    BATCH_SIZE = 4  # Lower per-device batch for 'Large' model memory
+    GRAD_ACCUMULATION = 8 # 4 * 8 = 32 effective batch size
+    LEARNING_RATE = 1e-5 # Lower LR for fine-tuning Large model
     NUM_EPOCHS = 3
     
     # Vector Search
