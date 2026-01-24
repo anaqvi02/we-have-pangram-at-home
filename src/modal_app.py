@@ -43,8 +43,9 @@ def download_data():
     ensure_dirs(str(HUMAN_DIR), str(AI_DIR))
     
     # Download directly to the Volume path
-    download_wildchat(output_dir=str(AI_DIR), limit=1000000, batch_size=100000)
-    download_c4_realnewslike(output_dir=str(HUMAN_DIR), limit=1000000, batch_size=100000)
+    # BUDGET OPTIMIZATION: Limit to 50k samples to ensure < $0.50 cost on T4
+    download_wildchat(output_dir=str(AI_DIR), limit=50000, batch_size=25000)
+    download_c4_realnewslike(output_dir=str(HUMAN_DIR), limit=50000, batch_size=25000)
     
     volume.commit()
     print("--- Download Complete & Committed to Volume ---")
@@ -73,11 +74,11 @@ def build_index():
     volume.commit()
     print("--- Index Build Complete & Committed ---")
 
-@app.function(image=image, volumes={DATA_ROOT: volume}, gpu="A10G", timeout=7200)
+@app.function(image=image, volumes={DATA_ROOT: volume}, gpu="T4", timeout=7200)
 def train():
     from src.train_lib import train_pipeline
     
-    print("--- Starting Cloud Training (A10G) ---")
+    print("--- Starting Cloud Training (T4) ---")
     
     train_pipeline(
         human_data_dir=str(HUMAN_DIR),
@@ -92,13 +93,25 @@ def train():
     print("--- Training Complete & Checkpoints Saved ---")
 
 @app.local_entrypoint()
-def main():
-    print("Triggering Modal Pipeline...")
-    # 1. Download
-    # download_data.remote()
+def main(action: str = "train"):
+    """
+    Control the pipeline.
+    Usage:
+    modal run src/modal_app.py --action download
+    modal run src/modal_app.py --action index
+    modal run src/modal_app.py --action train
+    modal run src/modal_app.py --action all
+    """
+    print(f"Triggering Modal Pipeline (Action: {action})...")
     
-    # 2. Index (Uncomment to run)
-    # build_index.remote()
+    if action in ["download", "all"]:
+        print("Schedulling Download...")
+        download_data.remote()
     
-    # 3. Train
-    train.remote()
+    if action in ["index", "all"]:
+        print("Schedulling Indexing...")
+        build_index.remote()
+    
+    if action in ["train", "all"]:
+        print("Schedulling Training...")
+        train.remote()

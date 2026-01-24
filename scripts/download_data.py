@@ -14,19 +14,21 @@ DATA_DIR = Config.DATA_DIR
 HUMAN_DIR = DATA_DIR / "human_corpus"
 AI_DIR = DATA_DIR / "ai_corpus"
 
-def ensure_dirs(human_dir, ai_dir):
-    Path(human_dir).mkdir(parents=True, exist_ok=True)
-    Path(ai_dir).mkdir(parents=True, exist_ok=True)
+def ensure_dirs():
+    HUMAN_DIR.mkdir(parents=True, exist_ok=True)
+    AI_DIR.mkdir(parents=True, exist_ok=True)
 
-def download_wildchat(output_dir, limit=1000000, batch_size=100000):
-    print(f"--- Downloading WildChat-1M (Limit: {limit}) to {output_dir} ---")
+def download_wildchat(output_dir=None, limit=1000000, batch_size=100000):
+    print(f"--- Downloading WildChat-1M (Limit: {limit}) ---")
     
-    output_path = Path(output_dir)
+    target_dir = Path(output_dir) if output_dir else AI_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
     # Clean existing parts
-    for f in output_path.glob("wildchat_part_*.parquet"):
+    for f in target_dir.glob("wildchat_part_*.parquet"):
         f.unlink()
     # Remove legacy single file
-    legacy = output_path / "wildchat.parquet"
+    legacy = target_dir / "wildchat.parquet"
     if legacy.exists():
         legacy.unlink()
 
@@ -55,7 +57,7 @@ def download_wildchat(output_dir, limit=1000000, batch_size=100000):
                         # Write Batch
                         if len(data_batch) >= batch_size:
                             df = pd.DataFrame(data_batch)
-                            out_path = output_path / f"wildchat_part_{batch_idx}.parquet"
+                            out_path = target_dir / f"wildchat_part_{batch_idx}.parquet"
                             df.to_parquet(out_path)
                             
                             # Clear RAM
@@ -72,7 +74,7 @@ def download_wildchat(output_dir, limit=1000000, batch_size=100000):
         # Final Batch
         if data_batch:
             df = pd.DataFrame(data_batch)
-            out_path = output_path / f"wildchat_part_{batch_idx}.parquet"
+            out_path = target_dir / f"wildchat_part_{batch_idx}.parquet"
             df.to_parquet(out_path)
             print(f"Saved final batch {batch_idx}")
             del data_batch
@@ -84,15 +86,17 @@ def download_wildchat(output_dir, limit=1000000, batch_size=100000):
     except Exception as e:
         print(f"Failed to download WildChat: {e}")
 
-def download_c4_realnewslike(output_dir, limit=1000000, batch_size=100000):
-    print(f"--- Downloading C4 RealNewsLike (Limit: {limit}) to {output_dir} ---")
+def download_c4_realnewslike(output_dir=None, limit=1000000, batch_size=100000):
+    print(f"--- Downloading C4 RealNewsLike (Limit: {limit}) ---")
     
-    output_path = Path(output_dir)
+    target_dir = Path(output_dir) if output_dir else HUMAN_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
     # Clean existing parts
-    for f in output_path.glob("c4_part_*.parquet"):
+    for f in target_dir.glob("c4_part_*.parquet"):
         f.unlink()
     # Remove legacy
-    legacy = output_path / "c4_realnewslike.parquet"
+    legacy = target_dir / "c4_realnewslike.parquet"
     if legacy.exists():
         legacy.unlink()
         
@@ -117,7 +121,7 @@ def download_c4_realnewslike(output_dir, limit=1000000, batch_size=100000):
                 
                 if len(data_batch) >= batch_size:
                      df = pd.DataFrame(data_batch)
-                     out_path = output_path / f"c4_part_{batch_idx}.parquet"
+                     out_path = target_dir / f"c4_part_{batch_idx}.parquet"
                      df.to_parquet(out_path)
                      
                      del df
@@ -129,7 +133,7 @@ def download_c4_realnewslike(output_dir, limit=1000000, batch_size=100000):
         # Final Batch
         if data_batch:
              df = pd.DataFrame(data_batch)
-             out_path = output_path / f"c4_part_{batch_idx}.parquet"
+             out_path = target_dir / f"c4_part_{batch_idx}.parquet"
              df.to_parquet(out_path)
              print(f"Saved final batch {batch_idx}")
              del data_batch
@@ -142,23 +146,17 @@ def download_c4_realnewslike(output_dir, limit=1000000, batch_size=100000):
         print(f"Failed to download C4: {e}")
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--human_dir", type=str, default=str(HUMAN_DIR))
-    parser.add_argument("--ai_dir", type=str, default=str(AI_DIR))
-    args = parser.parse_args()
-
-    ensure_dirs(args.human_dir, args.ai_dir)
+    ensure_dirs()
     
     # 1. AI Corpus
-    download_wildchat(output_dir=args.ai_dir, limit=1000000, batch_size=100000) 
+    download_wildchat(limit=1000000, batch_size=100000) 
     
     # 2. Human Corpus
-    download_c4_realnewslike(output_dir=args.human_dir, limit=1000000, batch_size=100000)
+    download_c4_realnewslike(limit=1000000, batch_size=100000)
     
     print("\n--- Download Complete ---")
-    print(f"AI Data: {args.ai_dir}")
-    print(f"Human Data: {args.human_dir}")
+    print(f"AI Data: {AI_DIR}")
+    print(f"Human Data: {HUMAN_DIR}")
 
 if __name__ == "__main__":
     main()
