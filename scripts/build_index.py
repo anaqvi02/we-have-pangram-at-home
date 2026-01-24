@@ -4,24 +4,28 @@ from datasets import load_dataset
 import random
 
 def main():
+    import argparse
+    from pathlib import Path
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--index_out", type=str, default=str(Config.INDEX_PATH))
+    parser.add_argument("--ai_data_dir", type=str, default=str(Config.AI_DATASET_PATH))
+    args = parser.parse_args()
+    
     print("Initializing Indexer...")
-    # Vital Optimization: store_text=False to prevents loading 1M strings into RAM.
-    # We rely on the Parquet file position matches (Implicit ID) for retrieval.
     indexer = VectorIndexer(store_text=False)
     
-    print(f"Loading AI Corpus from {Config.AI_DATASET_PATH}...")
+    ai_data_path = Path(args.ai_data_dir)
+    print(f"Loading AI Corpus from {ai_data_path}...")
     
-    # Updated: Load from directory of partitioned parquets using streaming
-    # We use a glob pattern or just directory path if supported
-    # datasets load_dataset("parquet", data_files="dir/*.parquet", streaming=True)
-    
-    ai_files = str(Config.AI_DATASET_PATH / "wildchat_part_*.parquet")
+    # Load from directory of partitioned parquets using streaming
+    ai_files = str(ai_data_path / "wildchat_part_*.parquet")
     try:
         dataset = load_dataset("parquet", data_files=ai_files, split="train", streaming=True)
     except Exception as e:
-        print(f"Error loading dataset: {e}")
-        # Fallback to single file if parts fail (legacy support)
-        legacy_file = str(Config.AI_DATASET_PATH / "wildchat.parquet")
+        print(f"Error loading dataset from parts: {e}")
+        # Fallback
+        legacy_file = str(ai_data_path / "wildchat.parquet")
         dataset = load_dataset("parquet", data_files=legacy_file, split="train", streaming=True)
 
     print(f"Indexing stream...")
@@ -32,8 +36,6 @@ def main():
     total_indexed = 0
     
     from tqdm import tqdm
-    # We don't know exact length in streaming mode easily without metadata, 
-    # but we can just use progress bar updates.
     
     for sample in tqdm(dataset, desc="Indexing"):
         text = sample['text']
@@ -53,8 +55,10 @@ def main():
         indexer.add_texts(batch_texts)
         total_indexed += len(batch_texts)
         
-    print("Saving Index...")
-    indexer.save(Config.INDEX_PATH)
+    print(f"Saving Index to {args.index_out}...")
+    # Ensure parent dir exists
+    Path(args.index_out).parent.mkdir(parents=True, exist_ok=True)
+    indexer.save(Path(args.index_out))
     print(f"Done! Indexed {total_indexed} documents.")
 
 if __name__ == "__main__":
