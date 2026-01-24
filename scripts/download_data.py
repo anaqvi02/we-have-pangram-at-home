@@ -156,12 +156,12 @@ import argparse
 
 def download_pangram_style(limit=1000000, batch_size=100000):
     """
-    Downloads a 'Pangram-Style' mix:
-    1. Student Essays (PERSUADE via Artem9k) - The core target.
-    2. Creative Writing (Reddit via Artem9k) - To understand creative human text.
-    3. Formal Literature (Gutenberg) - To understand high-vocabulary human text.
+    Downloads a 'Pangram-Style' mix focused on Formal Writing:
+    1. Student Essays & Creative (Artem9k) - 40%
+    2. Formal Literature (Gutenberg) - 30%
+    3. Encyclopedic/Formal (Wikipedia) - 30%
     
-    This diversity prevents the model from flagging ANY creative/formal text as AI.
+    This heavily upweights formal/academic writing styles as requested.
     """
     print(f"--- Downloading Pangram-Style Mix (Limit: {limit}) ---")
     
@@ -171,51 +171,56 @@ def download_pangram_style(limit=1000000, batch_size=100000):
             f.unlink()
             
     try:
-        # Source 1: The Essay/Creative Pile (Artem9k/DAIGT)
-        print("-> Stream 1: Student Essays & Creative Writing (Artem9k)...")
-        dataset_essays = load_dataset("artem9k/ai-text-detection-pile", split="train", streaming=True)
+        # Stream 1: Essays/Creative
+        print("-> Stream 1: Student Essays (Artem9k)...")
+        ds_essays = load_dataset("artem9k/ai-text-detection-pile", split="train", streaming=True)
         
-        # Source 2: Formal Literature (Gutenberg)
+        # Stream 2: Books
         print("-> Stream 2: Formal Literature (Gutenberg)...")
-        dataset_books = load_dataset("sedthh/gutenberg_english", split="train", streaming=True)
-        book_iter = iter(dataset_books)
+        ds_books = load_dataset("sedthh/gutenberg_english", split="train", streaming=True)
+        iter_books = iter(ds_books)
+        
+        # Stream 3: Wikipedia
+        print("-> Stream 3: Encyclopedic (Wikipedia)...")
+        ds_wiki = load_dataset("wikipedia", "20220301.en", split="train", streaming=True)
+        iter_wiki = iter(ds_wiki)
         
         ai_batch, human_batch = [], []
         ai_idx, human_idx = 0, 0
         ai_count, human_count = 0, 0
         
-        # We aim for 50/50 split between AI/Human
+        # 50/50 Split AI vs Human
         class_limit = limit 
         
-        # For Human, we mix: 70% Essays/Creative, 30% Gutenberg
-        human_essay_limit = int(class_limit * 0.7)
-        human_book_limit = class_limit - human_essay_limit
+        # Human Mix Ratios
+        limit_essays = int(class_limit * 0.4)
+        limit_books = int(class_limit * 0.3)
+        limit_wiki = class_limit - limit_essays - limit_books
         
-        pbar = tqdm(total=limit*2, desc="Mixing Pangram Data")
+        pbar = tqdm(total=limit*2, desc="Mixing Formal Data")
         
-        # 1. Process Essays & Creative (Main Loop)
-        for sample in dataset_essays:
-            if ai_count >= class_limit and human_count >= human_essay_limit:
+        # 1. Main Loop (Essays + AI)
+        for sample in ds_essays:
+            if ai_count >= class_limit and human_count >= limit_essays:
                 break
                 
             text = sample['text']
-            label = sample['generated'] # 1 = AI, 0 = Human
+            label = sample['generated'] # 1=AI, 0=Human
             
-            if not text or len(text.split()) < 50:
-                continue
+            if not text or len(text.split()) < 50: continue
 
             if label == 1:
                 if ai_count < class_limit:
-                    ai_batch.append({'text': text, 'source': 'essay_daigt', 'label': 1})
+                    ai_batch.append({'text': text, 'source': 'essay_daigt_ai', 'label': 1})
                     ai_count += 1
                     pbar.update(1)
             else:
-                if human_count < human_essay_limit:
+                if human_count < limit_essays:
                     human_batch.append({'text': text, 'source': 'essay_daigt_human', 'label': 0})
                     human_count += 1
                     pbar.update(1)
             
-            # Flush Check
+            # Flush
             if len(ai_batch) >= batch_size:
                 pd.DataFrame(ai_batch).to_parquet(AI_DIR / f"part_{ai_idx}.parquet")
                 del ai_batch[:]
@@ -226,25 +231,39 @@ def download_pangram_style(limit=1000000, batch_size=100000):
                 del human_batch[:]
                 gc.collect()
                 human_idx += 1
-                
-        # 2. Process Books (Fill the rest of Human)
-        print("-> Mixing in Gutenberg Books...")
-        books_added = 0
-        for sample in book_iter:
-            if books_added >= human_book_limit:
-                break
-            
+
+        # 2. Fill Books
+        print("-> Mixing in Gutenberg...")
+        added = 0
+        for sample in iter_books:
+            if added >= limit_books: break
             text = sample.get('text', '')
-            # Gutenberg texts are huge. We chunk them into essay-sized bits (e.g. 500 words)
             words = text.split()
             if len(words) < 200: continue
-            
-            # Take a 500 word slice to simulate an essay
-            snippet = " ".join(words[:1000]) 
+            snippet = " ".join(words[:1000]) # Essay-sized chunk
             
             human_batch.append({'text': snippet, 'source': 'gutenberg', 'label': 0})
             human_count += 1
-            books_added += 1
+            added += 1
+            pbar.update(1)
+            
+            if len(human_batch) >= batch_size:
+                pd.DataFrame(human_batch).to_parquet(HUMAN_DIR / f"part_{human_idx}.parquet")
+                del human_batch[:]
+                gc.collect()
+                human_idx += 1
+                
+        # 3. Fill Wikipedia
+        print("-> Mixing in Wikipedia...")
+        added = 0
+        for sample in iter_wiki:
+            if added >= limit_wiki: break
+            text = sample.get('text', '')
+            if len(text.split()) < 50: continue
+            
+            human_batch.append({'text': text, 'source': 'wikipedia', 'label': 0})
+            human_count += 1
+            added += 1
             pbar.update(1)
             
             if len(human_batch) >= batch_size:
@@ -260,7 +279,7 @@ def download_pangram_style(limit=1000000, batch_size=100000):
             pd.DataFrame(human_batch).to_parquet(HUMAN_DIR / f"part_{human_idx}.parquet")
             
         pbar.close()
-        print(f"Pangram-Mix Complete. AI: {ai_count}, Human: {human_count} (Essays: {human_count - books_added}, Books: {books_added})")
+        print(f"Pangram-Mix Complete. AI: {ai_count}, Human: {human_count}")
 
     except Exception as e:
         print(f"Failed to download Pangram Mix: {e}")
