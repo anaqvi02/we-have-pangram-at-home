@@ -1,4 +1,4 @@
-torch==2.2.2
+torch>=2.0.0
 torchvision
 torchaudio
 
