@@ -22,6 +22,21 @@ def main():
     index_out = Path(args.index_out)
     ai_data_path = Path(args.ai_data_dir)
 
+    print("\n--- 🖥️  Hardware Diagnostics ---")
+    import torch
+    print(f"PyTorch Version: {torch.__version__}")
+    if torch.cuda.is_available():
+        print(f"✅ CUDA Available: Yes")
+        print(f"   Device Count: {torch.cuda.device_count()}")
+        print(f"   Current Device: {torch.cuda.current_device()}")
+        print(f"   Device Name: {torch.cuda.get_device_name(0)}")
+    elif torch.backends.mps.is_available():
+        print(f"✅ MPS Available: Yes (Apple Silicon)")
+    else:
+        print(f"⚠️  WARNING: No GPU detected. Running on CPU (will be slow).")
+        print(f"   If you have a GPU, check your PyTorch installation.")
+    print("--------------------------------\n")
+
     print("Initializing Indexer...")
     # Vital Optimization: store_text=False to prevents loading 1M strings into RAM.
     # We rely on the Parquet file position matches (Implicit ID) for retrieval.
