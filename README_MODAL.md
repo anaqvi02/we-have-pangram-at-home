@@ -27,7 +27,7 @@ modal run src/modal_app.py --action index
 *Note: This data is stored in a distributed Volume named `pangram-data`.*
 
 ### 2. Train Model
-Runs the training loop on an NVIDIA T4 GPU (Budget Optimized).
+Runs the training loop on an NVIDIA A10G GPU (SOTA Performance).
 
 ```bash
 modal run src/modal_app.py --action train
