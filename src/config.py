@@ -46,6 +46,9 @@ class Config:
         if Config.DEVICE == "mps":
             print(f"MPS Available: {torch.backends.mps.is_available()}")
             print(f"MPS Built: {torch.backends.mps.is_built()}")
+        elif Config.DEVICE == "cuda":
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
         print(f"------------------------------")
 
 if __name__ == "__main__":
