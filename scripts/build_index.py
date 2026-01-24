@@ -42,7 +42,7 @@ def main():
     print(f"Indexing stream...")
     
     import torch
-    batch_size = 64
+    batch_size = 2048 # Optimized for T4/A10G (MiniLM is small)
     batch_texts = []
     total_indexed = 0
     
