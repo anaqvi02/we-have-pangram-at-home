@@ -16,3 +16,4 @@ usearch>=2.9.0
 pandas
 scikit-learn
 pyarrow
+numpy<2
