@@ -24,12 +24,9 @@ class Config:
         DEVICE = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
 
     # Context Window
-    # Formal writing benefits from longer context (1024).
-    # We use 1024 on CUDA (H100/B200) and 512 on MPS (to save local VRAM).
-    if DEVICE == "cuda":
-        MAX_LENGTH = 1024
-    else:
-        MAX_LENGTH = 512
+    # Context Window
+    # Reverted to 512 for speed (Linear/Quadratic cost of 1024 was too high).
+    MAX_LENGTH = 512
     
     # Training Hyperparameters
     # High-Performance Settings for Large Model
