@@ -3,6 +3,12 @@ import pandas as pd
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from tqdm import tqdm
+import sys
+import os
+
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from src.config import Config
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
