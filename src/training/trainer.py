@@ -126,18 +126,20 @@ class PangramTrainer:
             print(f"--- Epoch {epoch} Mining ---")
             
             # We treat the 'human_eval_pool' as the source for mining hard negatives
-            # User has ample compute: Scan the ENTIRE pool.
+            # Optimization: Subsample the pool to keep mining time reasonable
             import random
+            miner_pool_size = 60000
             pool_len = len(human_eval_pool)
-            print(f"Scanning FULL Human Pool ({pool_len} samples) for Hard Negatives...")
-            
-            # No subsampling - take everything
-            # Convert to list if it's not already a sequence to ensure stability
-            if isinstance(human_eval_pool, list):
-                 current_pool = human_eval_pool
+            if pool_len > miner_pool_size:
+                print(f"Subsampling {miner_pool_size} from {pool_len} for mining...")
+                sampled_indices = random.sample(range(pool_len), miner_pool_size)
+                current_pool = [human_eval_pool[i] for i in sampled_indices]
             else:
-                 # For map-style datasets or others, iterate/convert
-                 current_pool = [human_eval_pool[i] for i in range(pool_len)]
+                # Convert to list if it's not already a sequence to ensure stability
+                if isinstance(human_eval_pool, list):
+                    current_pool = human_eval_pool
+                else:
+                    current_pool = [human_eval_pool[i] for i in range(pool_len)]
 
             human_ds = StreamingTextDataset(current_pool, tokenizer=self.tokenizer)
             
