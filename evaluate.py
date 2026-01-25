@@ -68,7 +68,28 @@ def main():
         data = create_mock_data(200)
         dataset = StreamingTextDataset(data, detector.tokenizer)
     else:
-        raise NotImplementedError("Real evaluation data loading not implemented.")
+        # Real Evaluation
+        print("Loading evaluation data...")
+        from datasets import load_dataset
+        
+        # Load a small slice of real data (held out or just a subset for now)
+        # For strict evaluation, you should use a separate test split.
+        # Here we just grab a fresh slice from the files.
+        
+        human_files = str(Config.HUMAN_DATASET_PATH / "part_*.parquet")
+        ai_files = str(Config.AI_DATASET_PATH / "part_*.parquet")
+        
+        # Load 1000 samples from each
+        human_ds = load_dataset("parquet", data_files=human_files, split="train", streaming=True).take(1000)
+        ai_ds = load_dataset("parquet", data_files=ai_files, split="train", streaming=True).take(1000)
+        
+        data = []
+        for x in human_ds: 
+            data.append({'text': x['text'], 'label': 0})
+        for x in ai_ds: 
+            data.append({'text': x['text'], 'label': 1})
+            
+        dataset = StreamingTextDataset(data, detector.tokenizer)
         
     calculate_metrics(detector.model, dataset)
 
