@@ -34,7 +34,7 @@ class BenchmarkDataset(Dataset):
         return {
             'input_ids': encoding['input_ids'].squeeze(0),
             'attention_mask': encoding['attention_mask'].squeeze(0),
-            'label': torch.tensor(self.labels[idx], dtype=torch.long)
+            'labels': torch.tensor(self.labels[idx], dtype=torch.long)
         }
 
 def run_benchmark(csv_path, model_path=None):
