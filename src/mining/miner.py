@@ -11,7 +11,7 @@ class HardNegativeMiner:
         self.indexer = indexer
         self.device = Config.DEVICE
 
-    def mine(self, human_dataset, batch_size=Config.BATCH_SIZE * 4, top_k=1):
+    def mine(self, human_dataset, batch_size=Config.BATCH_SIZE * 8, top_k=1, max_negatives=50000):
         """
         1. Run inference on human_dataset.
         2. Find False Positives (predicted as AI).
@@ -19,16 +19,13 @@ class HardNegativeMiner:
         4. Return new training pairs.
         """
         print(f"--- Starting Mining Phase on {len(human_dataset)} human samples ---")
+        print(f"--- Mining Batch Size: {batch_size} | Max Hard Negatives: {max_negatives} ---")
         
         self.model.eval()
         hard_negatives = [] # List of text strings
         
         # Create a simple loader for the human text
         # We assume human_dataset[i] returns {'text': str, 'label': 0}
-        # We need a collate_fn to handle tokenization on the fly if not pre-tokenized
-        # But for mining, we might just want to process raw text if possible, 
-        # but the model needs tensors. 
-        # For simplicity, we assume dataset returns tensors valid for the model.
         
         loader = DataLoader(human_dataset, batch_size=batch_size, shuffle=False)
         
@@ -49,6 +46,11 @@ class HardNegativeMiner:
                 
                 for idx in fp_indices:
                     hard_negatives.append(texts[idx])
+                
+                # Early Exit Strategy
+                if len(hard_negatives) >= max_negatives:
+                    print(f"Reached limit of {max_negatives} hard negatives. Stopping early.")
+                    break
                     
         print(f"Found {len(hard_negatives)} Hard Negatives (False Positives).")
         

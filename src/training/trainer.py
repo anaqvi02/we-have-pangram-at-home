@@ -141,7 +141,8 @@ class PangramTrainer:
 
             human_ds = StreamingTextDataset(current_pool, tokenizer=self.tokenizer)
             
-            new_pairs = self.miner.mine(human_ds)
+            # Efficient Mining with Early Exit
+            new_pairs = self.miner.mine(human_ds, max_negatives=50000)
             
             if len(new_pairs) == 0:
                 print("No hard negatives found. Stopping curriculum early.")
