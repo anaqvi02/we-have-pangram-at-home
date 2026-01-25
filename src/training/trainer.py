@@ -84,11 +84,11 @@ class PangramTrainer:
         
         return avg_loss, accuracy
 
-    def run_curriculum(self, train_dataset, human_eval_pool, val_dataset=None, epochs=Config.NUM_EPOCHS):
+    def run_curriculum(self, train_dataset, human_eval_pool, val_dataset=None, epochs=Config.NUM_EPOCHS, start_epoch=0):
         """
         Curriculum Loop with Validation and Best Model Saving.
         """
-        print(f"--- Starting Curriculum Training for {epochs} Epochs ---")
+        print(f"--- Starting Curriculum Training for {epochs} Epochs (Starting from {start_epoch}) ---")
         current_train_data = train_dataset
         
         best_val_loss = float('inf')
@@ -99,7 +99,7 @@ class PangramTrainer:
             with open(log_file, "w") as f:
                 f.write("epoch,train_loss,val_loss,val_acc,dataset_size\n")
         
-        for epoch in range(epochs):
+        for epoch in range(start_epoch, epochs):
             # 1. Train
             self.train_epoch(current_train_data, epoch)
             

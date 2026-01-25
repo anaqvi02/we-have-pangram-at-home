@@ -30,7 +30,34 @@ def train_pipeline(
 
     # 1. Initialize Components
     print("Initializing Model...")
-    detector = PangramDetector()
+    
+    # Check for resumption
+    start_epoch = 0
+    resume_path = None
+    
+    # Simple scan for pangram_epoch_N folders
+    existing_epochs = []
+    if Config.CHECKPOINT_DIR.exists():
+        for p in Config.CHECKPOINT_DIR.iterdir():
+            if p.is_dir() and p.name.startswith("pangram_epoch_"):
+                try:
+                    ep_num = int(p.name.split("_")[-1])
+                    existing_epochs.append(ep_num)
+                except ValueError:
+                    pass
+    
+    if existing_epochs:
+        latest_epoch = max(existing_epochs)
+        resume_path = Config.CHECKPOINT_DIR / f"pangram_epoch_{latest_epoch}"
+        print(f"🔄 Resuming training from Epoch {latest_epoch} (Checkpoint: {resume_path})")
+        
+        # Load the model from the checkpoint
+        detector = PangramDetector.load(resume_path)
+        start_epoch = latest_epoch
+    else:
+        print("🆕 Starting training from scratch.")
+        detector = PangramDetector()
+
     tokenizer = detector.tokenizer
     
     print(f"Loading Indexer from {idx_path}...")
@@ -138,7 +165,7 @@ def train_pipeline(
     trainer = PangramTrainer(detector.model, tokenizer, indexer)
     
     # 4. Run Curriculum
-    trainer.run_curriculum(train_dataset, human_pool_source, val_dataset=val_dataset, epochs=epochs)
+    trainer.run_curriculum(train_dataset, human_pool_source, val_dataset=val_dataset, epochs=epochs, start_epoch=start_epoch)
     
     # 5. Save Model
     save_path.mkdir(parents=True, exist_ok=True)
