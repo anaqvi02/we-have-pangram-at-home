@@ -131,11 +131,15 @@ class PangramTrainer:
             # Optimization: Subsample the pool to keep mining time reasonable on consumer HW
             import random
             miner_pool_size = 20000
-            if len(human_eval_pool) > miner_pool_size:
-                print(f"Subsampling {miner_pool_size} from {len(human_eval_pool)} for mining...")
-                current_pool = random.sample(human_eval_pool, miner_pool_size)
+            pool_len = len(human_eval_pool)
+            if pool_len > miner_pool_size:
+                print(f"Subsampling {miner_pool_size} from {pool_len} for mining...")
+                # Sample indices instead of directly sampling the pool (which may not be a sequence)
+                sampled_indices = random.sample(range(pool_len), miner_pool_size)
+                current_pool = [human_eval_pool[i] for i in sampled_indices]
             else:
-                current_pool = human_eval_pool
+                # Convert to list if it's not already a sequence
+                current_pool = [human_eval_pool[i] for i in range(pool_len)]
 
             human_ds = StreamingTextDataset(current_pool, tokenizer=self.tokenizer)
             
