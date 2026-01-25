@@ -6,12 +6,15 @@ class Config:
     # Paths
     PROJECT_ROOT = Path(__file__).parent.parent
     # User requested custom data mount
-    DATA_DIR = Path("/mnt/dataset")
+    if Path("/mnt/dataset").exists():
+        DATA_DIR = Path("/mnt/dataset")
+    else:
+        DATA_DIR = PROJECT_ROOT / "data"
+
     SCRIPTS_DIR = PROJECT_ROOT / "scripts"
     
     # Model Architecture
     MODEL_NAME = "microsoft/deberta-v3-large"
-    MAX_LENGTH = 512  # Token limit
     
     # Hardware / Device
     # Priority: Env Var > MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
@@ -19,13 +22,21 @@ class Config:
         DEVICE = "cpu"
     else:
         DEVICE = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Context Window
+    # Formal writing benefits from longer context (1024).
+    # We use 1024 on CUDA (H100/B200) and 512 on MPS (to save local VRAM).
+    if DEVICE == "cuda":
+        MAX_LENGTH = 1024
+    else:
+        MAX_LENGTH = 512
     
     # Training Hyperparameters
     # High-Performance Settings for Large Model
     BATCH_SIZE = 4  # Lower per-device batch for 'Large' model memory
     GRAD_ACCUMULATION = 8 # 4 * 8 = 32 effective batch size
     LEARNING_RATE = 1e-5 # Lower LR for fine-tuning Large model
-    NUM_EPOCHS = 3
+    NUM_EPOCHS = 2
     
     # Vector Search
     EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -37,7 +48,10 @@ class Config:
     AI_DATASET_PATH = DATA_DIR / "ai_corpus"
     
     # Checkpoints (Custom Mount)
-    CHECKPOINT_DIR = Path("/mnt/weightsandotherstuff")
+    if Path("/mnt/weightsandotherstuff").exists():
+        CHECKPOINT_DIR = Path("/mnt/weightsandotherstuff")
+    else:
+        CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
     
     @staticmethod
     def print_hardware_status():
