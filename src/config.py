@@ -33,7 +33,7 @@ class Config:
     BATCH_SIZE = 4  # Lower per-device batch for 'Large' model memory
     GRAD_ACCUMULATION = 8 # 4 * 8 = 32 effective batch size
     LEARNING_RATE = 1e-5 # Lower LR for fine-tuning Large model
-    NUM_EPOCHS = 2
+    NUM_EPOCHS = 3
     
     # Vector Search
     EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
