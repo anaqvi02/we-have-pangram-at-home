@@ -116,9 +116,7 @@ class PangramTrainer:
                     print(f"New Best Model! (Loss: {val_loss:.4f})")
                     best_val_loss = val_loss
                     best_dir = Config.CHECKPOINT_DIR / "pangram_best"
-                    best_dir.mkdir(parents=True, exist_ok=True)
-                    self.model.save_pretrained(best_dir)
-                    self.tokenizer.save_pretrained(best_dir)
+                    self.save_checkpoint(best_dir)
 
             # Log to CSV
             with open(log_file, "a") as f:
@@ -196,14 +194,30 @@ class PangramTrainer:
             
             # --- Auto-Save Checkpoint ---
             checkpoint_dir = Config.CHECKPOINT_DIR / f"pangram_epoch_{epoch+1}"
-            print(f"Auto-saving checkpoint to {checkpoint_dir}...")
-            checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            self.model.save_pretrained(checkpoint_dir)
-            self.tokenizer.save_pretrained(checkpoint_dir)
+            self.save_checkpoint(checkpoint_dir)
             
             # Also update 'latest'
             latest_dir = Config.CHECKPOINT_DIR / "pangram_latest"
-            latest_dir.mkdir(parents=True, exist_ok=True)
-            self.model.save_pretrained(latest_dir)
-            self.tokenizer.save_pretrained(latest_dir)
+            self.save_checkpoint(latest_dir)
+
+    def save_checkpoint(self, path):
+        """Robust saving with local fallback."""
+        try:
+            print(f"Saving checkpoint to {path}...")
+            path.mkdir(parents=True, exist_ok=True)
+            self.model.save_pretrained(path)
+            self.tokenizer.save_pretrained(path)
             print("Checkpoint saved.")
+        except Exception as e:
+            print(f"❌ Failed to save checkpoint to {path}: {e}")
+            
+            # Fallback to local
+            fallback_path = Config.PROJECT_ROOT / "local_backups" / path.name
+            print(f"⚠️  Attempting fallback save to {fallback_path}...")
+            try:
+                fallback_path.mkdir(parents=True, exist_ok=True)
+                self.model.save_pretrained(fallback_path)
+                self.tokenizer.save_pretrained(fallback_path)
+                print(f"✅ Fallback save successful.")
+            except Exception as e2:
+                print(f"❌ FATAL: Fallback save also failed: {e2}")
