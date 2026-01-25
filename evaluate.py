@@ -8,8 +8,9 @@ from tqdm import tqdm
 from src.config import Config
 from src.model.detector import PangramDetector
 from src.data.loader import StreamingTextDataset
-# Reuse main's mock data for simplicity if needed, or import
-from train import create_mock_data
+# create_mock_data removed from train, implemented locally
+def create_mock_data(num_samples=200):
+    return [{'text': "Mock text " * 5, 'label': i % 2} for i in range(num_samples)]
 
 def calculate_metrics(model, dataset):
     model.eval()
