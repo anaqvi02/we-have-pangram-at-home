@@ -145,7 +145,7 @@ def run_benchmark(csv_path, model_path=None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--csv", type=str, default="data/test-benchmark.csv")
+    parser.add_argument("--csv", type=str, default="tests/benchmark_data.csv")
     parser.add_argument("--model", type=str, default=None, help="Path to checkpoint")
     args = parser.parse_args()
     
