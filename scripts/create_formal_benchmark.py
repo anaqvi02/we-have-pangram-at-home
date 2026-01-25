@@ -15,9 +15,10 @@ def create_formal_benchmark(output_path="tests/benchmark_formal.csv", samples_pe
     ds_human = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
     
     count = 0
-    # Skip first 10k to ensure we are far away from training data (if train used first set)
+    # Skip large amount to ensure we are far away from training data (Train Limit was 500k)
     ds_human_iter = iter(ds_human)
-    for _ in range(10000): next(ds_human_iter) # Fast skip
+    print("Skipping 600,000 human samples...")
+    for _ in range(600000): next(ds_human_iter) # Skip 600k
     
     for sample in ds_human_iter:
         text = sample.get('text', '')
@@ -34,7 +35,8 @@ def create_formal_benchmark(output_path="tests/benchmark_formal.csv", samples_pe
     ds_ai_iter = iter(ds_ai)
     
     # Skip deep
-    for _ in range(100000): next(ds_ai_iter) # Skip 100k to avoid train set overlap
+    print("Skipping 600,000 AI samples...")
+    for _ in range(600000): next(ds_ai_iter) # Skip 600k
     
     count = 0
     for sample in ds_ai_iter:
