@@ -202,15 +202,21 @@ class PangramTrainer:
             self.save_checkpoint(latest_dir)
 
     def save_checkpoint(self, path):
-        """Robust saving with local fallback."""
+        """Robust saving with local fallback and verification."""
         try:
             print(f"Saving checkpoint to {path}...")
             path.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(path)
             self.tokenizer.save_pretrained(path)
-            print("Checkpoint saved.")
+            
+            # Verify
+            if self.verify_checkpoint(path):
+                print(f"✅ Checkpoint verified at {path}")
+            else:
+                raise RuntimeError("Verification failed")
+                
         except Exception as e:
-            print(f"❌ Failed to save checkpoint to {path}: {e}")
+            print(f"❌ Failed to save/verify checkpoint to {path}: {e}")
             
             # Fallback to local
             fallback_path = Config.PROJECT_ROOT / "local_backups" / path.name
@@ -219,6 +225,35 @@ class PangramTrainer:
                 fallback_path.mkdir(parents=True, exist_ok=True)
                 self.model.save_pretrained(fallback_path)
                 self.tokenizer.save_pretrained(fallback_path)
-                print(f"✅ Fallback save successful.")
+                
+                if self.verify_checkpoint(fallback_path):
+                     print(f"✅ Fallback save successful and verified.")
+                else:
+                     print(f"❌ Fallback saved but failed verification!")
             except Exception as e2:
                 print(f"❌ FATAL: Fallback save also failed: {e2}")
+
+    def verify_checkpoint(self, path):
+        """Checks if critical files exist and are non-empty."""
+        required_files = ["config.json", "model.safetensors", "tokenizer_config.json"]
+        if not path.exists(): return False
+        
+        for f in required_files:
+            file_path = path / f
+            if not file_path.exists():
+                print(f"⚠️ Verification Error: Missing {f}")
+                return False
+            if file_path.stat().st_size == 0:
+                print(f"⚠️ Verification Error: Empty file {f}")
+                return False
+                
+        # Optional: Try lightweight loading (Config/Tokenizer only to avoid heavy VRAM)
+        try:
+            from transformers import AutoConfig, AutoTokenizer
+            AutoConfig.from_pretrained(path)
+            AutoTokenizer.from_pretrained(path)
+        except Exception as e:
+             print(f"⚠️ Verification Error: Corrupt config/tokenizer: {e}")
+             return False
+             
+        return True
