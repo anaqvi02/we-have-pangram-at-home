@@ -30,6 +30,15 @@ class PangramDetector(torch.nn.Module):
         
     @classmethod
     def load(cls, path):
+        import os
+        # Graceful handling for local paths
+        if not os.path.exists(path):
+            # If it looks like a path (starts with / or ./), raise clear error
+            if path.startswith("/") or path.startswith("./"):
+                raise FileNotFoundError(f"Model path not found: {path}\nDid you finish training?")
+            else:
+                print(f"Path not found locally, assuming Hugging Face Hub ID: {path}")
+        
         # We can just use standard HF loading for inference
         # But for training/fine-tuning we instantiate our class
         instance = cls(model_name=path)
