@@ -4,6 +4,8 @@ AI-generated text detector built for efficient training and inference on Apple S
 
 ## Quick Start
 
+For a detailed, step-by-step walkthrough of the data collection and training process, see the [**Setup & Training Guide**](SETUP_GUIDE.md).
+
 ### 1. Installation
 
 Clone the repository and install dependencies:

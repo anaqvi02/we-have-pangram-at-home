@@ -45,14 +45,17 @@ def main():
     print(f"Loading AI Corpus from {ai_data_path}...")
     
     # Updated: Load from directory of partitioned parquets using streaming
-    ai_files = str(ai_data_path / "part_*.parquet")
+    ai_files = str(ai_data_path / "*.parquet")
     try:
         dataset = load_dataset("parquet", data_files=ai_files, split="train", streaming=True)
     except Exception as e:
         print(f"Error loading dataset: {e}")
-        # Fallback to single file if parts fail (legacy support)
-        legacy_file = str(ai_data_path / "part_0.parquet")
-        dataset = load_dataset("parquet", data_files=legacy_file, split="train", streaming=True)
+        # Fallback to looking for any parquet if parts fail
+        legacy_files = list(ai_data_path.glob("*.parquet"))
+        if legacy_files:
+            dataset = load_dataset("parquet", data_files=[str(f) for f in legacy_files], split="train", streaming=True)
+        else:
+            raise FileNotFoundError(f"No parquet files found in {ai_data_path}")
 
     print(f"Indexing stream...")
     
@@ -64,7 +67,7 @@ def main():
     from tqdm import tqdm
     # Calculate estimated total for progress bar
     # 1. Count partition files
-    partition_files = list(ai_data_path.glob("part_*.parquet"))
+    partition_files = list(ai_data_path.glob("*.parquet"))
     # 2. Assume roughly 100k per file (based on download script)
     # If no partitions found (legacy single file), assume 1M default or try to read metadata (expensive)
     if partition_files:

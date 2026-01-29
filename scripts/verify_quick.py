@@ -26,11 +26,7 @@ def verify():
             all_good = False
             continue
             
-        files = list(path.glob("part_*.parquet"))
-        if not files:
-            # Fallback for legacy naming if needed, but we expect part_*.parquet
-            files = list(path.glob("*.parquet"))
-            
+        files = list(path.glob("*.parquet"))
         if not files:
             print(f"❌ No parquet files found in {path}")
             all_good = False
