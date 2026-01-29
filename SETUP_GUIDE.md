@@ -14,12 +14,19 @@ pip install -r requirements.txt
 
 ---
 
-## 📥 2. Data Collection (Balanced Essay Dataset)
+### 🔑 Kaggle Authentication
+The script requires a Kaggle account to download certain datasets. You can authenticate in two ways:
 
-The provided script downloads and filters data specifically for **high-school and university level English essays**. It automatically balances the dataset between Human and AI sources.
+1. **Environment Variables (Recommended for CLI)**:
+   ```bash
+   export KAGGLE_USERNAME="your_username"
+   export KAGGLE_KEY="your_api_key_from_token"
+   ```
 
-### Option A: Complete Download (HuggingFace)
-This will fetch ~200k samples per class from Wikipedia, arXiv, FineWeb-Edu (Human) and Cosmopedia, LMSYS, WildChat (AI).
+2. **Kaggle JSON**: Place your `kaggle.json` in `~/.kaggle/kaggle.json`.
+
+### Option A: Complete Download (HuggingFace + Kaggle)
+This will fetch ~200k samples per class from Wikipedia, arXiv, FineWeb-Edu (Human) and Cosmopedia, LMSYS, WildChat (AI), as well as PERSUADE and AI Essays from Kaggle.
 
 ```bash
 python scripts/download_data.py --target 200000

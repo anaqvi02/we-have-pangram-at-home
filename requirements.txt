@@ -21,3 +21,6 @@ numpy<2
 # Dashboard
 streamlit
 plotly
+
+# Kaggle API
+kaggle

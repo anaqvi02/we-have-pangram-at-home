@@ -52,6 +52,14 @@ except ImportError:
     HF_AVAILABLE = False
     print("Warning: 'datasets' library not available. Only Kaggle parsing will work.")
 
+# Kaggle API for automated downloads
+try:
+    import kaggle
+    KAGGLE_AVAILABLE = True
+except ImportError:
+    KAGGLE_AVAILABLE = False
+    print("Warning: 'kaggle' library not installed. Automated Kaggle downloads will not work.")
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -152,6 +160,48 @@ def clean_existing_files(output_dir, prefix):
     """Remove existing parquet files with given prefix."""
     for f in output_dir.glob(f"{prefix}_part_*.parquet"):
         f.unlink()
+
+def download_kaggle_dataset(dataset_id, dest_dir):
+    """
+    Download and unzip a Kaggle dataset to a specific directory.
+    
+    Args:
+        dataset_id: The Kaggle dataset ID (e.g., 'julesking/tla-lab-persuade-dataset')
+        dest_dir: Path where the dataset should be downloaded
+    
+    Returns:
+        Path: The path to the downloaded file(s)
+    """
+    if not KAGGLE_AVAILABLE:
+        print(f"❌ Cannot download {dataset_id}: 'kaggle' package not installed.")
+        return None
+    
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"📥 Downloading Kaggle dataset: {dataset_id}...")
+    try:
+        # Authenticate (uses ~/.kaggle/kaggle.json or KAGGLE_USERNAME/KAGGLE_KEY env vars)
+        kaggle.api.authenticate()
+        
+        # Download files
+        kaggle.api.dataset_download_files(dataset_id, path=dest_dir, unzip=True)
+        
+        # Find the main data file (CSV or Parquet)
+        candidates = list(dest_dir.glob("*.csv")) + list(dest_dir.glob("*.parquet"))
+        if candidates:
+            # Prefer larger files (usually the main dataset)
+            main_file = max(candidates, key=lambda p: p.stat().st_size)
+            print(f"✅ Downloaded {dataset_id} -> {main_file.name}")
+            return main_file
+        
+        print(f"⚠️  {dataset_id} downloaded but no CSV/Parquet files found in {dest_dir}")
+        return None
+        
+    except Exception as e:
+        print(f"❌ Kaggle download failed for {dataset_id}: {e}")
+        print("   Make sure you have set up your Kaggle API credentials.")
+        return None
 
 # =============================================================================
 # KAGGLE DATASET PARSERS (Local Files)
@@ -887,21 +937,41 @@ Examples:
         help="Only parse Kaggle datasets, skip HuggingFace downloads"
     )
     
+    parser.add_argument(
+        "--auto-kaggle", action="store_true", default=True,
+        help="Attempt to automatically download Kaggle datasets if not provided (default: True)"
+    )
+    
     args = parser.parse_args()
     
+    # Auto-download Kaggle if requested and paths not provided
+    persuade_path = args.persuade
+    ai_essays_path = args.ai_essays
+    
+    if args.auto_kaggle:
+        kaggle_raw_dir = Config.DATA_DIR / "raw_kaggle"
+        
+        if not persuade_path:
+            p_file = download_kaggle_dataset('julesking/tla-lab-persuade-dataset', kaggle_raw_dir / "persuade")
+            if p_file: persuade_path = str(p_file)
+            
+        if not ai_essays_path:
+            a_file = download_kaggle_dataset('denvermagtibay/ai-generated-essays-dataset', kaggle_raw_dir / "ai_essays")
+            if a_file: ai_essays_path = str(a_file)
+
     if args.kaggle_only:
-        if not args.persuade and not args.ai_essays:
-            print("Error: --kaggle-only requires at least one of --persuade or --ai-essays")
+        if not persuade_path and not ai_essays_path:
+            print("Error: --kaggle-only requires at least one of --persuade or --ai-essays (or working --auto-kaggle)")
             return
         
         ensure_dirs()
         stats = {'human': {}, 'ai': {}}
         
-        if args.persuade:
-            stats['human']['persuade'] = parse_persuade_dataset(args.persuade)
+        if persuade_path:
+            stats['human']['persuade'] = parse_persuade_dataset(persuade_path)
         
-        if args.ai_essays:
-            h, a = parse_ai_essays_dataset(args.ai_essays)
+        if ai_essays_path:
+            h, a = parse_ai_essays_dataset(ai_essays_path)
             stats['human']['ai_essays_human'] = h
             stats['ai']['ai_essays_ai'] = a
         
@@ -911,8 +981,8 @@ Examples:
     else:
         download_all(
             target_per_class=args.target,
-            persuade_path=args.persuade,
-            ai_essays_path=args.ai_essays
+            persuade_path=persuade_path,
+            ai_essays_path=ai_essays_path
         )
 
 
