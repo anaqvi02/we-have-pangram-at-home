@@ -25,6 +25,15 @@ The script requires a Kaggle account to download certain datasets. You can authe
 
 2. **Kaggle JSON**: Place your `kaggle.json` in `~/.kaggle/kaggle.json`.
 
+### 🤗 Hugging Face Authentication
+Some datasets (like `lmsys-chat-1m`) are gated and require authentication. Since you are likely in a non-interactive environment:
+
+1. **Obtain Token**: Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) and create a **Read** token.
+2. **Set Environment Variable**:
+   ```bash
+   export HF_TOKEN="your_huggingface_token"
+   ```
+
 ### Option A: Complete Download (HuggingFace + Kaggle)
 This will fetch ~200k samples per class from Wikipedia, arXiv, FineWeb-Edu (Human) and Cosmopedia, LMSYS, WildChat (AI), as well as PERSUADE and AI Essays from Kaggle.
 

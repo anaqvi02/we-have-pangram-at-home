@@ -44,6 +44,16 @@ sys.path.append(str(PROJECT_ROOT))
 
 from src.config import Config
 
+# HF Auth for gated datasets (like LMSYS)
+try:
+    from huggingface_hub import login
+    hf_token = os.environ.get("HF_TOKEN")
+    if hf_token:
+        print("🔑 Authenticating with Hugging Face...")
+        login(token=hf_token)
+except ImportError:
+    pass
+
 # Try importing datasets, but allow script to run for Kaggle-only mode without it
 try:
     from datasets import load_dataset
