@@ -456,8 +456,8 @@ def download_arxiv(limit=100000, batch_size=50000):
     clean_existing_files(HUMAN_DIR, "arxiv")
     
     try:
-        # Use the ccdv arxiv abstracts dataset
-        dataset = load_dataset("ccdv/arxiv-abstracts", split="train", streaming=True)
+        # Use the corrected arxiv dataset path
+        dataset = load_dataset("ccdv/arxiv-summarization", split="train", streaming=True)
         
         data_batch = []
         count = 0
@@ -469,7 +469,8 @@ def download_arxiv(limit=100000, batch_size=50000):
             if count >= limit:
                 break
             
-            abstract = sample.get('abstract', '')
+            # In ccdv/arxiv-summarization, the key is 'article'
+            abstract = sample.get('article', '')
             
             # Abstracts are shorter, but densely written
             if len(abstract.split()) < 100:
