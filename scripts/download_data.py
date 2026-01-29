@@ -129,7 +129,13 @@ def is_essay_like(text, min_words=300, max_words=3000, min_paragraphs=3, min_mar
             return False
     
     # Paragraph structure
-    paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 50]
+    # Robust check: try \n\n first, then fallback to \n if no \n\n are found
+    if '\n\n' in text:
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 50]
+    else:
+        # Fallback for web content that might use single newlines
+        paragraphs = [p.strip() for p in text.split('\n') if len(p.strip()) > 100]
+        
     if len(paragraphs) < min_paragraphs:
         return False
     
@@ -399,8 +405,13 @@ def download_wikipedia(limit=100000, batch_size=50000):
         batch_idx = 0
         
         pbar = tqdm(total=limit, desc="Wikipedia")
+        seen = 0
         
         for sample in dataset:
+            seen += 1
+            if seen % 10 == 0:
+                pbar.set_postfix(inspected=seen, refresh=False)
+            
             if count >= limit:
                 break
             
@@ -464,8 +475,13 @@ def download_arxiv(limit=100000, batch_size=50000):
         batch_idx = 0
         
         pbar = tqdm(total=limit, desc="arXiv")
+        seen = 0
         
         for sample in dataset:
+            seen += 1
+            if seen % 10 == 0:
+                pbar.set_postfix(inspected=seen, refresh=False)
+                
             if count >= limit:
                 break
             
@@ -528,15 +544,20 @@ def download_fineweb_edu(limit=100000, batch_size=50000):
         batch_idx = 0
         
         pbar = tqdm(total=limit, desc="FineWeb-Edu")
+        seen = 0
         
         for sample in dataset:
+            seen += 1
+            if seen % 100 == 0: # Higher frequency for web content
+                pbar.set_postfix(inspected=seen, refresh=False)
+                
             if count >= limit:
                 break
             
             text = sample.get('text', '')
             
-            # Strict essay filtering
-            if not is_essay_like(text, min_words=350, max_words=3000, min_paragraphs=4, min_markers=2):
+            # Relaxed essay filtering for web content
+            if not is_essay_like(text, min_words=300, max_words=3000, min_paragraphs=3, min_markers=1):
                 continue
             
             data_batch.append({
