@@ -15,6 +15,10 @@ class PangramTrainer:
         self.miner = HardNegativeMiner(model, indexer)
         self.device = Config.DEVICE
         
+        # Initialize Optimizer (State is persisted across epochs)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=Config.LEARNING_RATE)
+        self.scheduler = None # Initialized when dataloader is ready
+        
     def train_epoch(self, dataset, epoch_idx):
         print(f"--- Epoch {epoch_idx} Training ---")
         self.model.train()
@@ -26,10 +30,20 @@ class PangramTrainer:
             num_workers=0
         )
         
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=Config.LEARNING_RATE)
+        # Initialize/Update Scheduler based on current dataset size
+        num_training_steps = (len(dataloader) // Config.GRAD_ACCUMULATION) * Config.NUM_EPOCHS
+        num_warmup_steps = int(num_training_steps * 0.1) # 10% warmup
         
-        num_training_steps = len(dataloader)
-        progress_bar = tqdm(range(num_training_steps))
+        if self.scheduler is None:
+            print(f"Initializing Linear Scheduler (Steps: {num_training_steps}, Warmup: {num_warmup_steps})")
+            self.scheduler = get_scheduler(
+                "linear",
+                optimizer=self.optimizer,
+                num_warmup_steps=num_warmup_steps,
+                num_training_steps=num_training_steps
+            )
+        
+        progress_bar = tqdm(range(len(dataloader) // Config.GRAD_ACCUMULATION))
         
         for step, batch in enumerate(dataloader):
             input_ids = batch['input_ids'].to(self.device)
@@ -44,9 +58,10 @@ class PangramTrainer:
             loss.backward()
             
             if (step + 1) % Config.GRAD_ACCUMULATION == 0:
-                optimizer.step()
-                optimizer.zero_grad()
-                progress_bar.update(Config.GRAD_ACCUMULATION)
+                self.optimizer.step()
+                self.scheduler.step()
+                self.optimizer.zero_grad()
+                progress_bar.update(1)
                 
                 # MPS Memory Management
                 if self.device == 'mps' and step % 100 == 0:

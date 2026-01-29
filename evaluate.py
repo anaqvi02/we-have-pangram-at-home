@@ -77,8 +77,8 @@ def main():
         # For strict evaluation, you should use a separate test split.
         # Here we just grab a fresh slice from the files.
         
-        human_files = str(Config.HUMAN_DATASET_PATH / "part_*.parquet")
-        ai_files = str(Config.AI_DATASET_PATH / "part_*.parquet")
+        human_files = str(Config.HUMAN_DATASET_PATH / "*.parquet")
+        ai_files = str(Config.AI_DATASET_PATH / "*.parquet")
         
         # Load 1000 samples from each
         human_ds = load_dataset("parquet", data_files=human_files, split="train", streaming=True).take(1000)

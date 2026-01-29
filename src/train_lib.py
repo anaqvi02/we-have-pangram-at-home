@@ -79,20 +79,27 @@ def train_pipeline(
     else:
         print("Loading Real Datasets (Optimized)...")
         
-        # 1. Load Human Data
+        # 1. Load Human Data (all parquet files from all sources)
         print(f"Loading Human Corpus from {human_data_path}...")
-        human_files = str(human_data_path / "part_*.parquet")
+        human_files = str(human_data_path / "*.parquet")
         human_ds = load_dataset("parquet", data_files=human_files, split="train")
+        print(f"  → Loaded {len(human_ds)} human samples")
         
-        # 2. Load AI Data
+        # 2. Load AI Data (all parquet files from all sources)
         print(f"Loading AI Corpus from {ai_data_path}...")
-        ai_files = str(ai_data_path / "part_*.parquet")
+        ai_files = str(ai_data_path / "*.parquet")
         ai_ds = load_dataset("parquet", data_files=ai_files, split="train")
+        print(f"  → Loaded {len(ai_ds)} AI samples")
         
         # 3. Validation Set (Held Out - 2k samples)
         print("Preparing Validation Set...")
-        val_human = human_ds[0:1000]
-        val_ai = ai_ds[0:1000]
+        # Shuffle with seed for reproducibility
+        human_ds = human_ds.shuffle(seed=42)
+        ai_ds = ai_ds.shuffle(seed=42)
+        
+        val_size = 1000
+        val_human = human_ds.select(range(val_size))
+        val_ai = ai_ds.select(range(val_size))
         val_texts = val_human['text'] + val_ai['text']
         val_labels = [0] * len(val_human['text']) + [1] * len(val_ai['text'])
         
@@ -112,10 +119,15 @@ def train_pipeline(
         del val_texts, val_labels, val_encodings
         gc.collect()
 
-        # 4. Select Initial Training Data (20k Human + 20k AI)
-        print("Preparing Initial Training Set (40k samples)...")
-        initial_human = human_ds[1000:21000]
-        initial_ai = ai_ds[1000:21000]
+        # 4. Select Initial Training Data
+        # We start with a sizable chunk (e.g., 50k per class)
+        train_start_idx = val_size
+        train_per_class = min(50000, (len(human_ds) - val_size) // 2)
+        train_end_idx = train_start_idx + train_per_class
+        
+        print(f"Preparing Initial Training Set ({train_per_class * 2} samples)...")
+        initial_human = human_ds.select(range(train_start_idx, train_end_idx))
+        initial_ai = ai_ds.select(range(train_start_idx, train_end_idx))
         
         # 5. Pre-Tokenize NOW (Batch Process)
         print("Pre-tokenizing data...")
@@ -147,7 +159,7 @@ def train_pipeline(
         
         # 6. Prepare Mining Pool (Streaming)
         class HumanPoolWrapper:
-            def __init__(self, hf_ds, start_idx=21000):
+            def __init__(self, hf_ds, start_idx):
                 self.ds = hf_ds
                 self.start_idx = start_idx
             
@@ -159,7 +171,7 @@ def train_pipeline(
                 item = self.ds[real_idx]
                 return {'text': item['text'], 'label': 0}
                 
-        human_pool_source = HumanPoolWrapper(human_ds, start_idx=21000)
+        human_pool_source = HumanPoolWrapper(human_ds, start_idx=train_end_idx)
     
     # 3. Trainer
     trainer = PangramTrainer(detector.model, tokenizer, indexer)
