@@ -556,6 +556,17 @@ def sample_all(samples_per_source=2):
         label=1
     ))
     
+    # Cosmopedia web_samples_v2 - synthetic web content
+    all_samples.extend(sample_from_hf(
+        name="Cosmopedia/web_samples_v2",
+        dataset_id="HuggingFaceTB/cosmopedia",
+        config="web_samples_v2",
+        text_key="text",
+        filter_kwargs={'min_words': 250, 'max_words': 4000, 'min_paragraphs': 2},
+        samples_wanted=samples_per_source,
+        label=1
+    ))
+    
     # LMSYS (try with auth)
     if HF_TOKEN:
         print("\n🔑 HF_TOKEN found - attempting authenticated datasets...")
