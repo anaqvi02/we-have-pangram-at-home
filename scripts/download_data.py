@@ -787,15 +787,28 @@ def download_fineweb_edu(limit=100000, batch_size=50000):
         return 0
 
 
-def download_ivypanda(limit=50000, batch_size=25000):
-    """Download IvyPanda essays - college student essays."""
+def download_ivypanda(limit=50000, batch_size=None):
+    """Download IvyPanda essays - college student essays.
+
+    `batch_size` controls how many accepted samples we buffer before writing a parquet shard.
+    If omitted, it scales with `limit` so increasing `--target` doesn't require manually
+    adjusting hardcoded shard sizes.
+    """
     print(f"\n{'='*60}")
     print(f"DOWNLOADING: IvyPanda (Human College Essays, limit={limit})")
     print(f"{'='*60}")
-    
+
     if not HF_AVAILABLE:
         return 0
-    
+
+    if batch_size is None:
+        # Heuristic: write about ~10 shards for large runs, bounded for small runs.
+        # Keeps memory bounded while avoiding excessive tiny shard writes.
+        batch_size = max(5000, int(limit) // 10) if int(limit) > 0 else 25000
+        batch_size = min(50000, batch_size)
+        if int(limit) > 0:
+            batch_size = min(int(limit), batch_size)
+
     clean_existing_files(HUMAN_DIR, "ivypanda")
     
     try:
