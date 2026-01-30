@@ -155,6 +155,13 @@ class VectorIndexer:
 
         indexer.index.load(str(path))
 
+        # Ensure newly-added vectors (if any) continue after existing IDs.
+        # USearch exposes count via `__len__`.
+        try:
+            indexer.current_id = int(len(indexer.index))
+        except Exception:
+            pass
+
         if parquet_file and Path(parquet_file).exists():
             print(f"Using Parquet backing for text retrieval: {parquet_file}")
             from datasets import load_dataset

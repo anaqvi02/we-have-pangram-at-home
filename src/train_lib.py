@@ -45,14 +45,18 @@ def train_pipeline(
     # 1. Initialize Components
     print("Initializing Model...")
 
+    # Checkpoint root is driven by output_model_dir so Modal/notebook runs can persist
+    # everything to the mounted volume.
+    checkpoint_root = save_path
+
     # Check for resumption
     start_epoch = 0
     resume_path = None
 
     # Simple scan for pangram_epoch_N folders
     existing_epochs = []
-    if Config.CHECKPOINT_DIR.exists():
-        for p in Config.CHECKPOINT_DIR.iterdir():
+    if checkpoint_root.exists():
+        for p in checkpoint_root.iterdir():
             if p.is_dir() and p.name.startswith("pangram_epoch_"):
                 try:
                     ep_num = int(p.name.split("_")[-1])
@@ -62,10 +66,10 @@ def train_pipeline(
 
     if existing_epochs:
         latest_epoch = max(existing_epochs)
-        resume_path = Config.CHECKPOINT_DIR / f"pangram_epoch_{latest_epoch}"
+        resume_path = checkpoint_root / f"pangram_epoch_{latest_epoch}"
         print(f"🔄 Resuming training from Epoch {latest_epoch} (Checkpoint: {resume_path})")
 
-        detector = PangramDetector.load(resume_path)
+        detector = PangramDetector.load(str(resume_path))
         start_epoch = latest_epoch
     else:
         print("🆕 Starting training from scratch.")
@@ -147,7 +151,12 @@ def train_pipeline(
     
     # Training Set (start with 50k per class)
     train_start_idx = val_size
-    train_per_class = min(50000, (len(human_ds) - val_size) // 2, (len(ai_ds) - val_size) // 2)
+
+    # Available samples per class after carving out validation.
+    # We take up to 50k per class (not half of what's left).
+    human_available = max(0, len(human_ds) - val_size)
+    ai_available = max(0, len(ai_ds) - val_size)
+    train_per_class = min(50000, human_available, ai_available)
     train_end_idx = train_start_idx + train_per_class
     
     print(f"  → Initial training set: {train_per_class * 2:,} samples ({train_per_class} per class)")
@@ -184,7 +193,7 @@ def train_pipeline(
     print(f"   Tokenization happens on-the-fly (batched in collate_fn, dynamic padding)")
     
     # 3. Trainer
-    trainer = PangramTrainer(detector.model, tokenizer, indexer)
+    trainer = PangramTrainer(detector.model, tokenizer, indexer, checkpoint_root=checkpoint_root)
 
     # If resuming, restore optimizer/scaler state for true continuity.
     if resume_path is not None:

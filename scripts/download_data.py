@@ -15,7 +15,7 @@ HARD CAP SYSTEM (ensures diversity):
     
     AI (label=1):
         - AI Essays Dataset: 30% max (AI-generated subset) [Kaggle]
-        - Cosmopedia/stanford: 35% max (synthetic textbooks/stories) [HuggingFace]
+        - Cosmopedia/stanford/web_samples_v2: 35% max (synthetic textbooks/stories) [HuggingFace]
         - LMSYS Chat-1M: 25% max (LLM responses, filtered) [HuggingFace]
         - WildChat: 25% max (ChatGPT responses, filtered) [HuggingFace]
     
@@ -836,10 +836,17 @@ def download_ivypanda(limit=50000, batch_size=25000):
         return 0
 
 
-def download_cosmopedia(limit=150000, batch_size=50000):
-    """Download Cosmopedia - synthetic textbooks/stories (AI-generated)."""
+def download_cosmopedia(stanford_limit=50000, web_samples_v2_limit=100000, batch_size=50000):
+    """Download Cosmopedia - synthetic textbooks/stories and web content (AI-generated).
+    
+    Downloads from two subsets:
+    - stanford: synthetic textbooks/stories (higher quality, argumentative)
+    - web_samples_v2: synthetic web content (more diverse, slightly more lenient filtering)
+    """
     print(f"\n{'='*60}")
-    print(f"DOWNLOADING: Cosmopedia/stanford (AI, limit={limit})")
+    print(f"DOWNLOADING: Cosmopedia (AI)")
+    print(f"  - stanford: {stanford_limit:,} samples")
+    print(f"  - web_samples_v2: {web_samples_v2_limit:,} samples")
     print(f"{'='*60}")
     
     if not HF_AVAILABLE:
@@ -847,12 +854,11 @@ def download_cosmopedia(limit=150000, batch_size=50000):
     
     clean_existing_files(AI_DIR, "cosmopedia")
     
-    # Use only stanford subset (children's stories removed as they're not argumentative essays)
-    subset = 'stanford'
-    
     total_count = 0
     batch_idx = 0
     
+    # Download stanford subset
+    subset = 'stanford'
     print(f"\n→ Loading Cosmopedia/{subset}...")
     
     try:
@@ -861,15 +867,59 @@ def download_cosmopedia(limit=150000, batch_size=50000):
         data_batch = []
         count = 0
         
-        pbar = tqdm(total=limit, desc=f"Cosmopedia/{subset}")
+        pbar = tqdm(total=stanford_limit, desc=f"Cosmopedia/{subset}")
         
         for sample in dataset:
-            if count >= limit:
+            if count >= stanford_limit:
                 break
             
             text = sample.get('text', '')
             
             if not is_essay_like(text, min_words=300, max_words=4000, min_paragraphs=3):
+                continue
+            
+            data_batch.append({'text': text, 'source': f'cosmopedia_{subset}', 'label': 1})
+            count += 1
+            pbar.update(1)
+            
+            if len(data_batch) >= batch_size:
+                save_batch(data_batch, AI_DIR, "cosmopedia", batch_idx)
+                data_batch = []
+                batch_idx += 1
+                gc.collect()
+        
+        if data_batch:
+            save_batch(data_batch, AI_DIR, "cosmopedia", batch_idx)
+            data_batch = []
+            batch_idx += 1
+        
+        pbar.close()
+        total_count += count
+        print(f"  ✓ {subset}: {count} samples")
+        
+    except Exception as e:
+        print(f"  ✗ {subset} failed: {e}")
+    
+    # Download web_samples_v2 subset
+    subset = 'web_samples_v2'
+    print(f"\n→ Loading Cosmopedia/{subset}...")
+    
+    try:
+        dataset = load_dataset("HuggingFaceTB/cosmopedia", subset, split="train", streaming=True)
+        
+        data_batch = []
+        count = 0
+        
+        pbar = tqdm(total=web_samples_v2_limit, desc=f"Cosmopedia/{subset}")
+        
+        for sample in dataset:
+            if count >= web_samples_v2_limit:
+                break
+            
+            text = sample.get('text', '')
+            
+            # Apply essay-like filtering for web content (slightly more lenient)
+            if not is_essay_like(text, min_words=250, max_words=4000, min_paragraphs=2):
                 continue
             
             data_batch.append({'text': text, 'source': f'cosmopedia_{subset}', 'label': 1})
@@ -1073,9 +1123,10 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         },
         'ai': {
             'aiessays_ai': 0.30,
-            'cosmopedia': 0.35,
-            'lmsys': 0.25,
-            'wildchat': 0.25,
+            'cosmopedia': 0.25,
+            'cosmopedia_web_samples_v2': 0.20,
+            'lmsys': 0.20,
+            'wildchat': 0.20,
         }
     }
     
@@ -1160,8 +1211,18 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         
         # AI SOURCES - fill remaining capacity
         if total_ai_remaining > 0:
-            if ai_remaining['cosmopedia'] > 0:
-                stats['ai']['cosmopedia'] = download_cosmopedia(limit=ai_remaining['cosmopedia'])
+            # Cosmopedia handles both stanford and web_samples_v2 subsets
+            cosmopedia_total = ai_remaining.get('cosmopedia', 0) + ai_remaining.get('cosmopedia_web_samples_v2', 0)
+            if cosmopedia_total > 0:
+                # Split allocation: 2/3 for stanford, 1/3 for web_samples_v2
+                stanford_limit = int(cosmopedia_total * 0.67)
+                web_samples_v2_limit = cosmopedia_total - stanford_limit
+                cosmopedia_count = download_cosmopedia(
+                    stanford_limit=stanford_limit,
+                    web_samples_v2_limit=web_samples_v2_limit
+                )
+                # Track both subsets under the cosmopedia key for stats
+                stats['ai']['cosmopedia'] = cosmopedia_count
             if ai_remaining['lmsys'] > 0:
                 stats['ai']['lmsys'] = download_lmsys(limit=ai_remaining['lmsys'])
             if ai_remaining['wildchat'] > 0:
@@ -1175,6 +1236,14 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
     print("DOWNLOAD COMPLETE - SUMMARY (with Hard Caps)")
     print("=" * 70)
     
+    # Cosmopedia is tracked as a combined count (stanford + web_samples_v2).
+    # For cap comparisons, also combine the two caps so the summary reflects intent.
+    if 'cosmopedia' in stats['ai'] and 'cosmopedia_web_samples_v2' not in stats['ai']:
+        combined_cap = int(ai_caps.get('cosmopedia', 0)) + int(ai_caps.get('cosmopedia_web_samples_v2', 0))
+        if combined_cap > 0:
+            ai_caps = dict(ai_caps)
+            ai_caps['cosmopedia'] = combined_cap
+
     human_total = sum(stats['human'].values())
     ai_total = sum(stats['ai'].values())
     

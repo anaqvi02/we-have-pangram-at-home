@@ -1,4 +1,5 @@
 import torch
+from pathlib import Path
 from torch.utils.data import DataLoader
 from transformers import get_scheduler
 from tqdm import tqdm
@@ -9,12 +10,15 @@ import gc
 import torch.amp as amp
 
 class PangramTrainer:
-    def __init__(self, model, tokenizer, indexer):
+    def __init__(self, model, tokenizer, indexer, checkpoint_root=None):
         self.model = model
         self.tokenizer = tokenizer
         self.indexer = indexer
         self.miner = HardNegativeMiner(model, indexer)
         self.device = Config.DEVICE
+
+        # Where checkpoints/logs are written. Defaults to Config.CHECKPOINT_DIR.
+        self.checkpoint_root = Path(checkpoint_root) if checkpoint_root is not None else Config.CHECKPOINT_DIR
         
         # Mixed Precision Setup
         self.use_amp = self.device == "cuda"
@@ -233,7 +237,7 @@ class PangramTrainer:
         print(f"--- Starting Curriculum Training for {epochs} Epochs (Starting from {start_epoch}) ---")
         
         best_val_loss = float('inf')
-        log_file = Config.PROJECT_ROOT / "training_log.csv"
+        log_file = self.checkpoint_root / "training_log.csv"
         
         # Initialize log header
         if not log_file.exists():
@@ -256,7 +260,7 @@ class PangramTrainer:
                 if val_loss < best_val_loss:
                     print(f"🏆 New Best Model! (Loss: {val_loss:.4f})")
                     best_val_loss = val_loss
-                    best_dir = Config.CHECKPOINT_DIR / "pangram_best"
+                    best_dir = self.checkpoint_root / "pangram_best"
                     self.save_checkpoint(best_dir)
 
             # Get buffer size for logging
@@ -285,11 +289,9 @@ class PangramTrainer:
                 else:
                     current_pool = human_eval_pool
                 
-                # Wrap for miner (needs tokenizer)
-                human_ds = StreamingTextDataset(current_pool, tokenizer=self.tokenizer)
-                
                 # Mine hard negatives
-                new_pairs = self.miner.mine(human_ds, max_negatives=50000)
+                # Pass the HF dataset directly; miner tokenizes in a batched collate_fn.
+                new_pairs = self.miner.mine(current_pool, tokenizer=self.tokenizer, max_negatives=50000)
                 
                 if len(new_pairs) == 0:
                     print("  ⚠️ No hard negatives found. Stopping curriculum early.")
@@ -301,11 +303,11 @@ class PangramTrainer:
                 print(f"  → Dataset now has {len(train_dataset):,} samples")
             
             # --- Auto-Save Checkpoint ---
-            checkpoint_dir = Config.CHECKPOINT_DIR / f"pangram_epoch_{epoch+1}"
+            checkpoint_dir = self.checkpoint_root / f"pangram_epoch_{epoch+1}"
             self.save_checkpoint(checkpoint_dir)
-            
+
             # Also update 'latest'
-            latest_dir = Config.CHECKPOINT_DIR / "pangram_latest"
+            latest_dir = self.checkpoint_root / "pangram_latest"
             self.save_checkpoint(latest_dir)
             
             # Memory cleanup between epochs

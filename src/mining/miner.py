@@ -14,7 +14,7 @@ class HardNegativeMiner:
         self.use_amp = self.device == "cuda"
         self.autocast_dtype = torch.bfloat16 if (self.use_amp and torch.cuda.is_bf16_supported()) else torch.float16
 
-    def mine(self, human_dataset, batch_size=Config.BATCH_SIZE * 8, top_k=1, max_negatives=50000):
+    def mine(self, human_dataset, tokenizer, batch_size=Config.BATCH_SIZE * 8, top_k=1, max_negatives=50000):
         """Mine hard negatives.
 
         Strategy:
@@ -30,13 +30,32 @@ class HardNegativeMiner:
         self.model.eval()
         scored_hard_negatives = []  # list[(score: float, text: str)]
         
-        # Create a loader for the human text
+        num_workers = 4 if self.device == "cuda" else 0
+
+        def collate_fn(features):
+            texts = [f.get('text', '') for f in features]
+
+            enc = tokenizer(
+                texts,
+                truncation=True,
+                max_length=Config.MAX_LENGTH,
+                padding=True,
+                return_tensors='pt',
+            )
+
+            # Keep raw text for scoring + later retrieval.
+            enc['text'] = texts
+            return enc
+
+        # Create a loader for the human text (batched tokenization + dynamic padding)
         loader = DataLoader(
-            human_dataset, 
-            batch_size=batch_size, 
+            human_dataset,
+            batch_size=batch_size,
             shuffle=False,
-            num_workers=4,
-            pin_memory=True if self.device == 'cuda' else False
+            num_workers=num_workers,
+            pin_memory=True if self.device == 'cuda' else False,
+            persistent_workers=True if num_workers > 0 else False,
+            collate_fn=collate_fn,
         )
         
         with torch.no_grad():
