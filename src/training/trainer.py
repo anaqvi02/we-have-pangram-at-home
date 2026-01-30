@@ -6,6 +6,7 @@ from src.config import Config
 from src.mining.miner import HardNegativeMiner
 from src.data.loader import StreamingTextDataset
 import gc
+import torch.amp as amp
 
 class PangramTrainer:
     def __init__(self, model, tokenizer, indexer):
@@ -15,6 +16,14 @@ class PangramTrainer:
         self.miner = HardNegativeMiner(model, indexer)
         self.device = Config.DEVICE
         
+        # Mixed Precision Setup
+        self.use_amp = self.device == "cuda"
+        self.autocast_dtype = torch.bfloat16 if (self.use_amp and torch.cuda.is_bf16_supported()) else torch.float16
+        self.scaler = amp.GradScaler('cuda') if (self.use_amp and self.autocast_dtype == torch.float16) else None
+        
+        if self.use_amp:
+            print(f"✨ Mixed Precision Enabled: {self.autocast_dtype}")
+
         # Initialize Optimizer (State is persisted across epochs)
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=Config.LEARNING_RATE)
         self.scheduler = None # Initialized when dataloader is ready
@@ -27,7 +36,8 @@ class PangramTrainer:
             dataset, 
             batch_size=Config.BATCH_SIZE, 
             shuffle=True,
-            num_workers=0
+            num_workers=4, # Use multiple workers for speed
+            pin_memory=True if self.device == 'cuda' else False
         )
         
         # Initialize/Update Scheduler based on current dataset size
@@ -46,19 +56,28 @@ class PangramTrainer:
         progress_bar = tqdm(range(len(dataloader) // Config.GRAD_ACCUMULATION))
         
         for step, batch in enumerate(dataloader):
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
+            input_ids = batch['input_ids'].to(self.device, non_blocking=True)
+            attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
+            labels = batch['labels'].to(self.device, non_blocking=True)
             
-            outputs = self.model(input_ids, attention_mask, labels=labels)
-            loss = outputs.loss
+            # Autocast Forward Pass
+            with amp.autocast(device_type='cuda', dtype=self.autocast_dtype, enabled=self.use_amp):
+                outputs = self.model(input_ids, attention_mask, labels=labels)
+                loss = outputs.loss / Config.GRAD_ACCUMULATION
             
-            # Gradient Accumulation
-            loss = loss / Config.GRAD_ACCUMULATION
-            loss.backward()
+            # Scaled Backward Pass
+            if self.scaler:
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
             
             if (step + 1) % Config.GRAD_ACCUMULATION == 0:
-                self.optimizer.step()
+                if self.scaler:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
+                    
                 self.scheduler.step()
                 self.optimizer.zero_grad()
                 progress_bar.update(1)
@@ -166,11 +185,6 @@ class PangramTrainer:
                 break
                 
             # 3. Augment
-            # For the next epoch, we should optimally MIX the new hard pairs with the old data
-            # or train ONLY on the hard pairs (Fine-tuning approach).
-            # Pangram suggests a curriculum, implying we focus on the hard stuff.
-            # We'll prepend the new data to the training set list.
-            # 3. Augment
             # New optimization: Tokenize immediately and extend the tensor dataset
             if hasattr(current_train_data, 'extend'):
                 print(f"Augmenting PretokenizedDataset with {len(new_pairs)} new samples...")
@@ -187,12 +201,6 @@ class PangramTrainer:
                 )
                 
                 # Create mini dataset
-                # We need to import PretokenizedDataset or simple create a temporary one?
-                # Actually we can just update the tensors directly if we didn't import the class, 
-                # but better to assume the method 'extend' expects a compatible object.
-                # Let's import PretokenizedDataset at top or just use the same logic here.
-                
-                # Optimization: We defined extend(self, other). So we need an object with .input_ids etc.
                 from src.data.loader import PretokenizedDataset
                 new_ds = PretokenizedDataset(
                     encodings['input_ids'],

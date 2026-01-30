@@ -30,8 +30,15 @@ class Config:
     
     # Training Hyperparameters
     # High-Performance Settings for Large Model
-    BATCH_SIZE = 4  # Lower per-device batch for 'Large' model memory
-    GRAD_ACCUMULATION = 8 # 4 * 8 = 32 effective batch size
+    # On high-end GPUs like B200, we can use a much larger batch size.
+    # Current effective batch size goal is 32.
+    if DEVICE == "cuda" and torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory >= 40e9:
+        BATCH_SIZE = 32  # Use full power of modern GPUs
+        GRAD_ACCUMULATION = 1
+    else:
+        BATCH_SIZE = 4  
+        GRAD_ACCUMULATION = 8 
+        
     LEARNING_RATE = 1e-5 # Lower LR for fine-tuning Large model
     NUM_EPOCHS = 3
     

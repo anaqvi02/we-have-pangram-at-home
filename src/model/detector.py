@@ -14,8 +14,16 @@ class PangramDetector(torch.nn.Module):
         )
         self.tokenizer = DebertaV2TokenizerFast.from_pretrained(model_name)
         
-        # Move to MPS/device
+        # Move to device
         self.to(self.config.DEVICE)
+        
+        # Experimental: torch.compile for Linux/CUDA speedup
+        if self.config.DEVICE == "cuda" and hasattr(torch, "compile"):
+            print("🚀 Compiling model with torch.compile()...")
+            try:
+                self.model = torch.compile(self.model)
+            except Exception as e:
+                print(f"⚠️ torch.compile failed: {e}. Proceeding without compilation.")
         
     def forward(self, input_ids, attention_mask, labels=None):
         return self.model(
