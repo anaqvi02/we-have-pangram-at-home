@@ -17,13 +17,7 @@ class PangramDetector(torch.nn.Module):
         # Move to device
         self.to(self.config.DEVICE)
         
-        # Experimental: torch.compile for Linux/CUDA speedup
-        if self.config.DEVICE == "cuda" and hasattr(torch, "compile"):
-            print("🚀 Compiling model with torch.compile()...")
-            try:
-                self.model = torch.compile(self.model)
-            except Exception as e:
-                print(f"⚠️ torch.compile failed: {e}. Proceeding without compilation.")
+        # torch.compile is applied in the training pipeline to avoid double compilation.
         
     def forward(self, input_ids, attention_mask, labels=None):
         return self.model(

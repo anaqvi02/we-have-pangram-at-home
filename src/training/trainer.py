@@ -4,7 +4,7 @@ from transformers import get_scheduler
 from tqdm import tqdm
 from src.config import Config
 from src.mining.miner import HardNegativeMiner
-from src.data.loader import StreamingTextDataset
+from src.data.loader import StreamingTextDataset, GrowableDataset
 import gc
 import torch.amp as amp
 
@@ -25,78 +25,172 @@ class PangramTrainer:
             print(f"✨ Mixed Precision Enabled: {self.autocast_dtype}")
 
         # Initialize Optimizer (State is persisted across epochs)
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=Config.LEARNING_RATE)
-        self.scheduler = None # Initialized when dataloader is ready
+        # Prefer fused optimizer on CUDA when available (PyTorch 2+).
+        use_fused = False
+        if self.device == "cuda":
+            try:
+                use_fused = True
+                self.optimizer = torch.optim.AdamW(
+                    self.model.parameters(),
+                    lr=Config.LEARNING_RATE,
+                    fused=True,
+                )
+            except TypeError:
+                use_fused = False
+
+        if not use_fused:
+            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=Config.LEARNING_RATE)
         
-    def train_epoch(self, dataset, epoch_idx):
+        # Gradient clipping threshold
+        self.max_grad_norm = 1.0
+        
+    def train_epoch(self, dataset, epoch_idx, total_epochs):
+        """
+        Train for one epoch.
+        
+        Args:
+            dataset: Training dataset
+            epoch_idx: Current epoch number (0-indexed)
+            total_epochs: Total number of epochs (for scheduler calculation)
+        """
         print(f"--- Epoch {epoch_idx} Training ---")
         self.model.train()
         
+        # Determine number of workers based on device
+        num_workers = 4 if self.device == 'cuda' else 0
+        
+        def collate_fn(features):
+            texts = [f['text'] for f in features]
+            labels = torch.tensor([int(f['labels']) for f in features], dtype=torch.long)
+
+            enc = self.tokenizer(
+                texts,
+                truncation=True,
+                max_length=Config.MAX_LENGTH,
+                padding=True,
+                return_tensors='pt',
+            )
+
+            enc['labels'] = labels
+            return enc
+
         dataloader = DataLoader(
-            dataset, 
-            batch_size=Config.BATCH_SIZE, 
+            dataset,
+            batch_size=Config.BATCH_SIZE,
             shuffle=True,
-            num_workers=4, # Use multiple workers for speed
-            pin_memory=True if self.device == 'cuda' else False
+            num_workers=num_workers,
+            pin_memory=True if self.device == 'cuda' else False,
+            persistent_workers=True if num_workers > 0 else False,
+            collate_fn=collate_fn,
         )
         
-        # Initialize/Update Scheduler based on current dataset size
-        num_training_steps = (len(dataloader) // Config.GRAD_ACCUMULATION) * Config.NUM_EPOCHS
-        num_warmup_steps = int(num_training_steps * 0.1) # 10% warmup
+        # Recreate scheduler each epoch based on CURRENT dataset size
+        # This is crucial for curriculum learning where dataset grows
+        steps_per_epoch = len(dataloader) // Config.GRAD_ACCUMULATION
+        remaining_epochs = total_epochs - epoch_idx
+        num_training_steps = steps_per_epoch * remaining_epochs
+        num_warmup_steps = int(steps_per_epoch * 0.1)  # 10% of first epoch
         
-        if self.scheduler is None:
-            print(f"Initializing Linear Scheduler (Steps: {num_training_steps}, Warmup: {num_warmup_steps})")
-            self.scheduler = get_scheduler(
-                "linear",
-                optimizer=self.optimizer,
-                num_warmup_steps=num_warmup_steps,
-                num_training_steps=num_training_steps
-            )
+        print(f"  → Dataset size: {len(dataset):,} samples")
+        print(f"  → Steps this epoch: {steps_per_epoch:,}")
+        print(f"  → Scheduler: {num_training_steps} steps, {num_warmup_steps} warmup")
         
-        progress_bar = tqdm(range(len(dataloader) // Config.GRAD_ACCUMULATION))
+        scheduler = get_scheduler(
+            "linear",
+            optimizer=self.optimizer,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=num_training_steps
+        )
         
+        progress_bar = tqdm(range(steps_per_epoch), desc=f"Epoch {epoch_idx}")
+        running_loss = 0.0
+        step_count = 0
+        
+        def _optimizer_step():
+            if self.scaler:
+                self.scaler.unscale_(self.optimizer)
+
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+
+            if self.scaler:
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                self.optimizer.step()
+
+            scheduler.step()
+            self.optimizer.zero_grad()
+
         for step, batch in enumerate(dataloader):
             input_ids = batch['input_ids'].to(self.device, non_blocking=True)
             attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
             labels = batch['labels'].to(self.device, non_blocking=True)
-            
+
             # Autocast Forward Pass
             with amp.autocast(device_type='cuda', dtype=self.autocast_dtype, enabled=self.use_amp):
                 outputs = self.model(input_ids, attention_mask, labels=labels)
                 loss = outputs.loss / Config.GRAD_ACCUMULATION
-            
+
             # Scaled Backward Pass
             if self.scaler:
                 self.scaler.scale(loss).backward()
             else:
                 loss.backward()
-            
+
+            running_loss += loss.item() * Config.GRAD_ACCUMULATION
+
             if (step + 1) % Config.GRAD_ACCUMULATION == 0:
-                if self.scaler:
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    self.optimizer.step()
-                    
-                self.scheduler.step()
-                self.optimizer.zero_grad()
+                _optimizer_step()
+
+                step_count += 1
+                avg_loss = running_loss / step_count
+                progress_bar.set_postfix({'loss': f'{avg_loss:.4f}'})
                 progress_bar.update(1)
-                
-                # MPS Memory Management
+
+                # Memory Management
                 if self.device == 'mps' and step % 100 == 0:
                     torch.mps.empty_cache()
-                    
-        return dataset # Return dataset for continuity
+                elif self.device == 'cuda' and step % 500 == 0:
+                    torch.cuda.empty_cache()
+
+        # Flush remainder microbatches (otherwise final partial accumulation is dropped)
+        if (step + 1) % Config.GRAD_ACCUMULATION != 0:
+            _optimizer_step()
+            step_count += 1
+        
+        progress_bar.close()
+        final_loss = running_loss / max(step_count, 1)
+        print(f"  → Epoch {epoch_idx} complete. Avg Loss: {final_loss:.4f}")
+        return final_loss
 
     def evaluate(self, dataset):
         """Run evaluation on a held-out dataset."""
         self.model.eval()
+
+        num_workers = 4 if self.device == 'cuda' else 0
+
+        def collate_fn(features):
+            texts = [f['text'] for f in features]
+            labels = torch.tensor([int(f['labels']) for f in features], dtype=torch.long)
+
+            enc = self.tokenizer(
+                texts,
+                truncation=True,
+                max_length=Config.MAX_LENGTH,
+                padding=True,
+                return_tensors='pt',
+            )
+
+            enc['labels'] = labels
+            return enc
+
         dataloader = DataLoader(
-            dataset, 
-            batch_size=Config.BATCH_SIZE, 
-            shuffle=False, 
-            num_workers=4,
-            pin_memory=True if self.device == 'cuda' else False
+            dataset,
+            batch_size=Config.BATCH_SIZE,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True if self.device == 'cuda' else False,
+            collate_fn=collate_fn,
         )
         
         total_loss = 0
@@ -128,9 +222,15 @@ class PangramTrainer:
     def run_curriculum(self, train_dataset, human_eval_pool, val_dataset=None, epochs=Config.NUM_EPOCHS, start_epoch=0):
         """
         Curriculum Loop with Validation and Best Model Saving.
+        
+        Args:
+            train_dataset: GrowableDataset that can be extended with mined samples
+            human_eval_pool: HuggingFace Dataset for mining hard negatives
+            val_dataset: Optional validation dataset
+            epochs: Total number of epochs
+            start_epoch: Epoch to resume from
         """
         print(f"--- Starting Curriculum Training for {epochs} Epochs (Starting from {start_epoch}) ---")
-        current_train_data = train_dataset
         
         best_val_loss = float('inf')
         log_file = Config.PROJECT_ROOT / "training_log.csv"
@@ -138,11 +238,11 @@ class PangramTrainer:
         # Initialize log header
         if not log_file.exists():
             with open(log_file, "w") as f:
-                f.write("epoch,train_loss,val_loss,val_acc,dataset_size\n")
+                f.write("epoch,train_loss,val_loss,val_acc,dataset_size,mined_samples\n")
         
         for epoch in range(start_epoch, epochs):
             # 1. Train
-            self.train_epoch(current_train_data, epoch)
+            train_loss = self.train_epoch(train_dataset, epoch, epochs)
             
             # 2. Validate
             val_loss = 0.0
@@ -154,76 +254,51 @@ class PangramTrainer:
                 
                 # Save Best Model
                 if val_loss < best_val_loss:
-                    print(f"New Best Model! (Loss: {val_loss:.4f})")
+                    print(f"🏆 New Best Model! (Loss: {val_loss:.4f})")
                     best_val_loss = val_loss
                     best_dir = Config.CHECKPOINT_DIR / "pangram_best"
                     self.save_checkpoint(best_dir)
 
+            # Get buffer size for logging
+            mined_total = train_dataset.get_buffer_size() if hasattr(train_dataset, 'get_buffer_size') else 0
+            
             # Log to CSV
             with open(log_file, "a") as f:
-                 f.write(f"{epoch},0.0,{val_loss:.4f},{val_acc:.4f},{len(current_train_data)}\n")
+                f.write(f"{epoch},{train_loss:.4f},{val_loss:.4f},{val_acc:.4f},{len(train_dataset)},{mined_total}\n")
 
-            # 3. Mine
-            print(f"--- Epoch {epoch} Mining ---")
-            
-            # We treat the 'human_eval_pool' as the source for mining hard negatives
-            # Optimization: Subsample the pool to keep mining time reasonable
-            import random
-            miner_pool_size = 60000
-            pool_len = len(human_eval_pool)
-            if pool_len > miner_pool_size:
-                print(f"Subsampling {miner_pool_size} from {pool_len} for mining...")
-                sampled_indices = random.sample(range(pool_len), miner_pool_size)
-                current_pool = [human_eval_pool[i] for i in sampled_indices]
-            else:
-                # Convert to list if it's not already a sequence to ensure stability
-                if isinstance(human_eval_pool, list):
-                    current_pool = human_eval_pool
+            # 3. Mine (skip on last epoch - no point mining if we won't train again)
+            if epoch < epochs - 1:
+                print(f"--- Epoch {epoch} Mining ---")
+                
+                # Subsample mining pool for efficiency
+                import random
+                from datasets import Dataset as HFDataset
+                
+                miner_pool_size = 60000
+                pool_len = len(human_eval_pool)
+                
+                if pool_len > miner_pool_size:
+                    print(f"  → Subsampling {miner_pool_size:,} from {pool_len:,} for mining...")
+                    # Use HF Dataset's efficient selection
+                    indices = random.sample(range(pool_len), miner_pool_size)
+                    current_pool = human_eval_pool.select(indices)
                 else:
-                    current_pool = [human_eval_pool[i] for i in range(pool_len)]
-
-            human_ds = StreamingTextDataset(current_pool, tokenizer=self.tokenizer)
-            
-            # Efficient Mining with Early Exit
-            new_pairs = self.miner.mine(human_ds, max_negatives=50000)
-            
-            if len(new_pairs) == 0:
-                print("No hard negatives found. Stopping curriculum early.")
-                break
+                    current_pool = human_eval_pool
                 
-            # 3. Augment
-            # New optimization: Tokenize immediately and extend the tensor dataset
-            if hasattr(current_train_data, 'extend'):
-                print(f"Augmenting PretokenizedDataset with {len(new_pairs)} new samples...")
-                texts = [p['text'] for p in new_pairs]
-                labels = [p['label'] for p in new_pairs]
+                # Wrap for miner (needs tokenizer)
+                human_ds = StreamingTextDataset(current_pool, tokenizer=self.tokenizer)
                 
-                # Tokenize new batch
-                encodings = self.tokenizer(
-                    texts,
-                    truncation=True,
-                    padding="max_length",
-                    max_length=Config.MAX_LENGTH,
-                    return_tensors="pt"
-                )
+                # Mine hard negatives
+                new_pairs = self.miner.mine(human_ds, max_negatives=50000)
                 
-                # Create mini dataset
-                from src.data.loader import PretokenizedDataset
-                new_ds = PretokenizedDataset(
-                    encodings['input_ids'],
-                    encodings['attention_mask'],
-                    torch.tensor(labels, dtype=torch.long)
-                )
+                if len(new_pairs) == 0:
+                    print("  ⚠️ No hard negatives found. Stopping curriculum early.")
+                    break
                 
-                current_train_data.extend(new_ds)
-                print(f"Dataset Size grew to {len(current_train_data)}")
-                
-            elif isinstance(current_train_data.data_source, list):
-                # Legacy path for tests
-                current_train_data.data_source.extend(new_pairs)
-                print(f"Dataset Size grew to {len(current_train_data)}")
-            else:
-                print("Warning: Dataset augmentation not supported for this type.")
+                # Extend training dataset with mined samples
+                print(f"  → Adding {len(new_pairs):,} mined samples to training set...")
+                train_dataset.extend(new_pairs)
+                print(f"  → Dataset now has {len(train_dataset):,} samples")
             
             # --- Auto-Save Checkpoint ---
             checkpoint_dir = Config.CHECKPOINT_DIR / f"pangram_epoch_{epoch+1}"
@@ -232,6 +307,11 @@ class PangramTrainer:
             # Also update 'latest'
             latest_dir = Config.CHECKPOINT_DIR / "pangram_latest"
             self.save_checkpoint(latest_dir)
+            
+            # Memory cleanup between epochs
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def save_checkpoint(self, path):
         """Robust saving with local fallback and verification."""
@@ -240,6 +320,12 @@ class PangramTrainer:
             path.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(path)
             self.tokenizer.save_pretrained(path)
+            
+            # Save optimizer state for true resumption
+            torch.save({
+                'optimizer_state': self.optimizer.state_dict(),
+                'scaler_state': self.scaler.state_dict() if self.scaler else None,
+            }, path / "trainer_state.pt")
             
             # Verify
             if self.verify_checkpoint(path):

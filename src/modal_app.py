@@ -35,17 +35,18 @@ CHECKPOINT_DIR = DATA_ROOT / "checkpoints"
 
 # 4. Functions
 
-@app.function(image=image, volumes={DATA_ROOT: volume}, timeout=3600)
+@app.function(image=image, volumes={DATA_ROOT: volume}, timeout=7200)
 def download_data():
-    from scripts.download_data import download_wildchat, download_c4_realnewslike, ensure_dirs
+    from scripts.download_data import download_all
     
-    print("--- Starting Cloud Download ---")
-    ensure_dirs(str(HUMAN_DIR), str(AI_DIR))
+    print("--- Starting Cloud Download (V4 Data Strategy) ---")
     
-    # Download directly to the Volume path
-    # BUDGET OPTIMIZATION: Limit to 50k samples to ensure < $0.50 cost on T4
-    download_wildchat(output_dir=str(AI_DIR), limit=50000, batch_size=25000)
-    download_c4_realnewslike(output_dir=str(HUMAN_DIR), limit=50000, batch_size=25000)
+    # Download all sources (Wikipedia, FineWeb, IvyPanda, Cosmopedia, LMSYS, WildChat)
+    # Skip Kaggle in cloud mode (no credentials), rely on HuggingFace sources
+    download_all(
+        target_per_class=200000,
+        skip_kaggle=True
+    )
     
     volume.commit()
     print("--- Download Complete & Committed to Volume ---")
@@ -78,7 +79,7 @@ def build_index():
 def train():
     from src.train_lib import train_pipeline
     
-    print("--- Starting Cloud Training (T4) ---")
+    print("--- Starting Cloud Training (A10G) ---")
     
     train_pipeline(
         human_data_dir=str(HUMAN_DIR),

@@ -37,11 +37,18 @@ class Config:
     
     # Training Hyperparameters
     # High-Performance Settings for Large Model
-    # On high-end GPUs like B200, we can use a much larger batch size.
-    # Current effective batch size goal is 32.
-    if DEVICE == "cuda" and torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory >= 40e9:
-        BATCH_SIZE = 32  # Use full power of modern GPUs
-        GRAD_ACCUMULATION = 1
+    # Dynamic batch size based on available VRAM
+    if DEVICE == "cuda" and torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        if vram_gb >= 140:  # B200 / H200 (192GB / 141GB)
+            BATCH_SIZE = 64
+            GRAD_ACCUMULATION = 1
+        elif vram_gb >= 40:  # A100 / H100
+            BATCH_SIZE = 32
+            GRAD_ACCUMULATION = 1
+        else:
+            BATCH_SIZE = 8
+            GRAD_ACCUMULATION = 4
     else:
         BATCH_SIZE = 4  
         GRAD_ACCUMULATION = 8 

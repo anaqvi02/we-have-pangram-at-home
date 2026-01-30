@@ -1,9 +1,35 @@
 """
-V3 Data Download Script: The "Academic Gap" Fix
-- Drops 'ArXiv' (bad formatting artifacts)
-- Drops 'Wikipedia' (encyclopedia style bias)
-- Adds 'IvyPanda' (College Student Essays)
-- Boosts 'FineWeb-Edu' (High-quality Academic Web)
+Essay-Focused Data Download Script for AI Detection Training (V4)
+
+This script downloads and filters data from multiple sources to create a balanced
+dataset specifically for training an AI detector on English essays.
+
+Data Sources:
+    HUMAN (label=0):
+        - PERSUADE: Student argumentative essays (grades 6-12) [Kaggle]
+        - AI Essays Dataset: Human subset [Kaggle]
+        - FineWeb-Edu: Educational web content [HuggingFace]
+        - IvyPanda: College student essays [HuggingFace]
+    
+    AI (label=1):
+        - AI Essays Dataset: AI-generated subset [Kaggle]
+        - Cosmopedia: Synthetic textbooks/stories [HuggingFace]
+        - LMSYS Chat-1M: LLM responses (filtered) [HuggingFace]
+        - WildChat: ChatGPT responses (filtered) [HuggingFace]
+
+
+Usage:
+    # Download all sources with default limits
+    python download_data.py
+
+    # Custom target per class
+    python download_data.py --target 500000
+
+    # Include Kaggle datasets (requires Kaggle API setup)
+    python download_data.py --persuade /path/to/persuade.csv
+
+    # Skip Kaggle, HuggingFace only
+    python download_data.py --skip-kaggle
 """
 
 import os
@@ -21,213 +47,1070 @@ sys.path.append(str(PROJECT_ROOT))
 
 from src.config import Config
 
-# Try importing dependencies
+# =============================================================================
+# AUTHENTICATION
+# =============================================================================
+
+# HuggingFace Auth for gated datasets (like LMSYS)
 try:
     from huggingface_hub import login
     hf_token = os.environ.get("HF_TOKEN")
-    if hf_token: login(token=hf_token)
+    if hf_token:
+        print("🔑 Authenticating with Hugging Face...")
+        login(token=hf_token)
+except ImportError:
+    pass
+
+# HuggingFace datasets library
+try:
     from datasets import load_dataset
     HF_AVAILABLE = True
 except ImportError:
     HF_AVAILABLE = False
-    print("Warning: 'datasets' library not available.")
+    print("Warning: 'datasets' library not available. Only Kaggle parsing will work.")
 
+# Kaggle API
 try:
     import kaggle
     KAGGLE_AVAILABLE = True
 except ImportError:
     KAGGLE_AVAILABLE = False
+    print("Warning: 'kaggle' library not installed. Kaggle downloads will not work.")
 
 # =============================================================================
-# CONFIG
+# CONFIGURATION
 # =============================================================================
 
 DATA_DIR = Config.DATA_DIR
 HUMAN_DIR = DATA_DIR / "human_corpus"
 AI_DIR = DATA_DIR / "ai_corpus"
 
-# 1. NEW: IvyPanda (The College Bridge)
-# Strips "References" to prevent cheating
+# =============================================================================
+# ESSAY DETECTION (Improved V4)
+# =============================================================================
+# Instead of relying on a small keyword pool, we use multiple heuristics:
+# 1. Structural analysis (paragraphs, sentences)
+# 2. Anti-pattern filtering (code, HTML, etc.)
+# 3. Style metrics (sentence variation, formality)
+# 4. Optional keyword boosting (not required)
+
+# Anti-patterns: Definitely NOT essays
+CODE_PATTERNS = [
+    '```',              # Markdown code blocks
+    'def ',             # Python function
+    'function ',        # JavaScript
+    'class ',           # OOP
+    'import ',          # Code imports
+    'from ',            # Python imports  
+    '$ ',               # Shell prompt
+    'sudo ',            # Shell commands
+    '<html',            # HTML
+    '<?php',            # PHP
+    'SELECT ',          # SQL
+    '/**',              # JSDoc
+    '#include',         # C/C++
+    'public static',    # Java
+    '= {',              # Object literal
+    '=> {',             # Arrow function
+    'npm install',      # Package manager
+    'pip install',      # Package manager
+]
+
+# Structural anti-patterns
+STRUCTURAL_ANTI_PATTERNS = [
+    (r'^[-*•]\s', 15),           # Too many bullet points (threshold)
+    (r'^\d+\.\s', 20),           # Too many numbered lists
+    (r'\|.*\|.*\|', 3),          # Markdown tables
+    (r'^#{1,6}\s', 10),          # Too many headings (not essay-like)
+]
+
+# Template/report patterns - these indicate structured documents, not essays
+TEMPLATE_ANTI_PATTERNS = [
+    # Legal brief patterns
+    'table of contents',
+    'facts\n',           # Section header
+    'issue\n',           # Section header  
+    'holding\n',         # Section header
+    'reasoning\n',       # Section header
+    'references\n',      # Section header at end
+    
+    # Case citation patterns (e.g., "533 U.S. 27")
+    r'\d{1,3}\s+u\.?\s*s\.?\s+\d+',
+    
+    # Report/brief indicators
+    'executive summary',
+    'abstract\n',
+    'methodology\n',
+    'findings\n',
+    'recommendations\n',
+    'appendix',
+    
+    # Template markers
+    '[insert',
+    '[your name',
+    '[date]',
+    'lorem ipsum',
+    
+    # Q&A format
+    'question:',
+    'answer:',
+    'q:',
+    'a:',
+]
+
+# Non-essay patterns: Filter out travel guides, business descriptions, etc.
+NON_ESSAY_PATTERNS = [
+    # Numbered sections typical of guides/how-to articles
+    r'^\d+\.\s+\w+',           # "1. Introduction", "2. Packing"
+    r'^\d+\)\s+\w+',           # "1) First step"
+    
+    # Explicit section headers
+    r'^Title:\s*',
+    r'^Introduction:\s*$',
+    r'^Conclusion:\s*$',
+    r'^Step \d+',
+    
+    # Travel/guide content markers
+    r'\btravel guide\b',
+    r'\bpacking\s+(?:essentials|list|tips)',
+    r'\bvisit\s+(?:Morocco|destination|place)',
+    r'\btips\s+for\s+travel',
+    
+    # Business description markers
+    r'Co\.,?\s+Ltd\.',
+    r'Corporation\s+is\s+a',
+    r'founded\s+in\s+\d{4}',
+    r'leading\s+(?:provider|manufacturer|company)',
+    r'specializes\s+in\s+(?:the\s+)?(?:research|production|development)',
+    
+    # Recipe/how-to markers
+    r'ingredients:',
+    r'instructions:',
+    r'how\s+to\s+make',
+    
+    # Product review markers
+    r'product\s+review',
+    r'pros\s+and\s+cons',
+]
+
+def has_non_essay_patterns(text):
+    """Check if text contains non-essay patterns (travel guides, business descriptions, etc.)."""
+    text_lower = text.lower()
+    for pattern in NON_ESSAY_PATTERNS:
+        if re.search(pattern, text_lower, re.MULTILINE | re.IGNORECASE):
+            return True
+    return False
+
+# Formality indicators (boost essay score)
+FORMAL_INDICATORS = [
+    # Transitional phrases
+    'however', 'therefore', 'furthermore', 'moreover', 'nevertheless',
+    'consequently', 'additionally', 'subsequently', 'meanwhile',
+    # Academic language
+    'according to', 'research shows', 'studies indicate', 'evidence suggests',
+    'it is important', 'significant', 'analysis', 'demonstrate',
+    # Essay structure
+    'in conclusion', 'in summary', 'to summarize', 'firstly', 'secondly',
+    'on the other hand', 'in contrast', 'for example', 'for instance',
+    'as a result', 'in addition', 'in particular', 'specifically',
+    # Argumentation
+    'argue that', 'claim that', 'suggest that', 'believe that',
+    'this essay', 'this paper', 'thesis', 'perspective', 'viewpoint',
+]
+
+def analyze_text_structure(text):
+    """
+    Analyze text structure to determine essay-likeness.
+    Returns a dict of metrics.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    
+    # Basic counts
+    words = text.split()
+    word_count = len(words)
+    
+    if word_count < 50:
+        return None
+    
+    # Sentence analysis (rough)
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+    sentence_count = len(sentences)
+    
+    if sentence_count < 3:
+        return None
+    
+    # Calculate average sentence length
+    avg_sentence_length = word_count / max(sentence_count, 1)
+    
+    # Sentence length variation (std dev approximation)
+    sentence_lengths = [len(s.split()) for s in sentences]
+    if len(sentence_lengths) > 1:
+        mean_len = sum(sentence_lengths) / len(sentence_lengths)
+        variance = sum((x - mean_len) ** 2 for x in sentence_lengths) / len(sentence_lengths)
+        sentence_variation = variance ** 0.5
+    else:
+        sentence_variation = 0
+    
+    # Paragraph analysis
+    if '\n\n' in text:
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 30]
+    else:
+        paragraphs = [p.strip() for p in text.split('\n') if len(p.strip()) > 50]
+    paragraph_count = len(paragraphs)
+    
+    # Formality score (count of formal indicators)
+    text_lower = text.lower()
+    formality_score = sum(1 for indicator in FORMAL_INDICATORS if indicator in text_lower)
+    
+    return {
+        'word_count': word_count,
+        'sentence_count': sentence_count,
+        'paragraph_count': paragraph_count,
+        'avg_sentence_length': avg_sentence_length,
+        'sentence_variation': sentence_variation,
+        'formality_score': formality_score,
+    }
+
+
+def has_code_patterns(text):
+    """Check if text contains code-like patterns."""
+    for pattern in CODE_PATTERNS:
+        if pattern in text:
+            return True
+    return False
+
+
+def has_structural_antipatterns(text):
+    """Check if text has too many structural anti-patterns (lists, tables, etc.)."""
+    lines = text.split('\n')
+    
+    for pattern, threshold in STRUCTURAL_ANTI_PATTERNS:
+        count = sum(1 for line in lines if re.match(pattern, line.strip()))
+        if count > threshold:
+            return True
+    
+    return False
+
+
+def has_template_patterns(text):
+    """Detect template-based documents like legal briefs, case reports, etc."""
+    text_lower = text.lower()
+    for pattern in TEMPLATE_ANTI_PATTERNS:
+        # Check if it's a regex pattern or simple string
+        if pattern.startswith(r'\d'):
+            # It's a regex for case citations
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                return True
+        elif pattern in text_lower:
+            return True
+    return False
+
+
+def is_essay_like(text, min_words=200, max_words=5000, min_paragraphs=2, 
+                  require_formality=False, strict=False):
+    """
+    Determine if text is essay-like using multiple heuristics.
+    
+    This is a more robust approach than simple keyword matching:
+    1. Word count bounds
+    2. Code/anti-pattern filtering
+    3. Structural analysis (paragraphs, sentences)
+    4. Sentence variation (essays have varied sentence lengths)
+    5. Optional formality requirements
+    
+    Args:
+        text: The text to analyze
+        min_words: Minimum word count (default: 200)
+        max_words: Maximum word count (default: 5000)
+        min_paragraphs: Minimum paragraph count (default: 2)
+        require_formality: If True, require at least one formal indicator
+        strict: If True, apply stricter filtering (for chat data)
+    
+    Returns:
+        bool: True if text appears essay-like
+    """
+    if not text or not isinstance(text, str):
+        return False
+    
+    # Quick rejection: code patterns
+    if has_code_patterns(text):
+        return False
+    
+    # Structural anti-patterns
+    if has_structural_antipatterns(text):
+        return False
+    
+    # Template-based documents (legal briefs, case reports, etc.)
+    if has_template_patterns(text):
+        return False
+    
+    # Analyze structure
+    metrics = analyze_text_structure(text)
+    if metrics is None:
+        return False
+    
+    # Word count bounds
+    if not (min_words <= metrics['word_count'] <= max_words):
+        return False
+    
+    # Paragraph requirement
+    if metrics['paragraph_count'] < min_paragraphs:
+        return False
+    
+    # Sentence structure requirements
+    # Essays typically have varied sentence lengths (not all same length)
+    if metrics['sentence_count'] < 5:
+        return False
+    
+    # Average sentence length should be reasonable (not too short like chat, not too long)
+    if metrics['avg_sentence_length'] < 8 or metrics['avg_sentence_length'] > 50:
+        return False
+    
+    # Strict mode: higher requirements for chat-sourced data
+    if strict:
+        # Require more paragraphs
+        if metrics['paragraph_count'] < 3:
+            return False
+        # Require some sentence variation
+        if metrics['sentence_variation'] < 3:
+            return False
+        # Require formality indicators
+        if metrics['formality_score'] < 2:
+            return False
+    
+    # Optional formality requirement
+    if require_formality and metrics['formality_score'] < 1:
+        return False
+    
+    return True
+
+
 def clean_essay_references(text):
-    if not isinstance(text, str): return ""
-    patterns = [r'\n\s*References\s*\n', r'\n\s*Works Cited\s*\n', r'\n\s*Bibliography\s*\n']
+    """Strip reference sections from essays (to prevent model from cheating on citations)."""
+    if not isinstance(text, str):
+        return ""
+    patterns = [
+        r'\n\s*References\s*\n',
+        r'\n\s*Works Cited\s*\n',
+        r'\n\s*Bibliography\s*\n',
+        r'\n\s*Sources\s*\n',
+    ]
     cleaned = text
     for p in patterns:
-        parts = re.split(p, cleaned, flags=re.IGNORECASE|re.DOTALL)
-        if len(parts) > 1: cleaned = parts[0].strip()
+        parts = re.split(p, cleaned, flags=re.IGNORECASE | re.DOTALL)
+        if len(parts) > 1:
+            cleaned = parts[0].strip()
     return cleaned
 
+# =============================================================================
+# FILE UTILITIES
+# =============================================================================
+
 def ensure_dirs():
+    """Create output directories if they don't exist."""
     HUMAN_DIR.mkdir(parents=True, exist_ok=True)
     AI_DIR.mkdir(parents=True, exist_ok=True)
 
+
 def save_batch(data_batch, output_dir, prefix, batch_idx):
-    if not data_batch: return
+    """Save a batch of data to parquet."""
+    if not data_batch:
+        return None
     df = pd.DataFrame(data_batch)
     out_path = output_dir / f"{prefix}_part_{batch_idx}.parquet"
     df.to_parquet(out_path)
+    return out_path
+
 
 def clean_existing_files(output_dir, prefix):
+    """Remove existing parquet files with given prefix."""
     for f in output_dir.glob(f"{prefix}_part_*.parquet"):
         f.unlink()
 
+
+def download_kaggle_dataset(dataset_id, dest_dir):
+    """Download and unzip a Kaggle dataset."""
+    if not KAGGLE_AVAILABLE:
+        print(f"❌ Cannot download {dataset_id}: 'kaggle' package not installed.")
+        return None
+    
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"📥 Downloading Kaggle dataset: {dataset_id}...")
+    try:
+        kaggle.api.authenticate()
+        kaggle.api.dataset_download_files(dataset_id, path=dest_dir, unzip=True)
+        
+        candidates = list(dest_dir.glob("*.csv")) + list(dest_dir.glob("*.parquet"))
+        if candidates:
+            main_file = max(candidates, key=lambda p: p.stat().st_size)
+            print(f"✅ Downloaded {dataset_id} -> {main_file.name}")
+            return main_file
+        
+        print(f"⚠️  {dataset_id} downloaded but no CSV/Parquet found")
+        return None
+        
+    except Exception as e:
+        print(f"❌ Kaggle download failed: {e}")
+        return None
+
 # =============================================================================
-# DOWNLOADERS
+# KAGGLE DATASET PARSERS
 # =============================================================================
 
-def download_ivypanda(limit=50000):
+def parse_persuade_dataset(input_path, batch_size=50000):
     """
-    Downloads IvyPanda essays to fill the 'College Gap'.
-    Crucial for fixing false positives on academic writing.
+    Parse the PERSUADE dataset - Human student essays (grades 6-12).
+    Dataset: https://www.kaggle.com/datasets/julesking/tla-lab-persuade-dataset
     """
-    print(f"\n{'='*60}\nDOWNLOADING: IvyPanda (Human College Essays)\n{'='*60}")
-    if not HF_AVAILABLE: return 0
+    print(f"\n{'='*60}")
+    print("PARSING: PERSUADE Dataset (Human Essays)")
+    print(f"{'='*60}")
+    
+    input_path = Path(input_path)
+    if not input_path.exists():
+        print(f"❌ File not found: {input_path}")
+        return 0
+    
+    df = pd.read_csv(input_path) if input_path.suffix == '.csv' else pd.read_parquet(input_path)
+    print(f"Loaded {len(df)} rows. Columns: {list(df.columns)}")
+    
+    # Detect text column
+    text_col = None
+    for candidate in ['full_text', 'text', 'essay_text', 'discourse_text']:
+        if candidate in df.columns:
+            text_col = candidate
+            break
+    
+    if text_col is None:
+        print(f"❌ Could not find text column")
+        return 0
+    
+    # Handle discourse aggregation if needed
+    if text_col == 'discourse_text' and 'essay_id_comp' in df.columns:
+        print("Aggregating discourse elements by essay_id...")
+        df = df.groupby('essay_id_comp')[text_col].apply(' '.join).reset_index()
+        df.columns = ['essay_id', 'text']
+        text_col = 'text'
+    
+    clean_existing_files(HUMAN_DIR, "persuade")
+    
+    data_batch = []
+    count = 0
+    batch_idx = 0
+    
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="PERSUADE"):
+        text = str(row[text_col])
+        
+        # Light filtering - PERSUADE is already essays
+        if len(text.split()) < 100:
+            continue
+        
+        data_batch.append({'text': text, 'source': 'persuade', 'label': 0})
+        count += 1
+        
+        if len(data_batch) >= batch_size:
+            save_batch(data_batch, HUMAN_DIR, "persuade", batch_idx)
+            data_batch = []
+            batch_idx += 1
+    
+    if data_batch:
+        save_batch(data_batch, HUMAN_DIR, "persuade", batch_idx)
+    
+    print(f"✅ PERSUADE: {count} essays saved")
+    return count
+
+
+def parse_ai_essays_dataset(input_path, batch_size=50000):
+    """
+    Parse AI Generated Essays dataset - contains BOTH human and AI essays.
+    Dataset: https://www.kaggle.com/datasets/denvermagtibay/ai-generated-essays-dataset
+    """
+    print(f"\n{'='*60}")
+    print("PARSING: AI Essays Dataset (Human + AI)")
+    print(f"{'='*60}")
+    
+    input_path = Path(input_path)
+    if not input_path.exists():
+        print(f"❌ File not found: {input_path}")
+        return 0, 0
+    
+    df = pd.read_csv(input_path) if input_path.suffix == '.csv' else pd.read_parquet(input_path)
+    print(f"Loaded {len(df)} rows. Columns: {list(df.columns)}")
+    
+    text_col = 'text' if 'text' in df.columns else 'essay'
+    label_col = 'label' if 'label' in df.columns else 'generated'
+    
+    print(f"Label distribution:\n{df[label_col].value_counts()}")
+    
+    human_df = df[df[label_col] == 0]
+    ai_df = df[df[label_col] == 1]
+    
+    clean_existing_files(HUMAN_DIR, "aiessays_human")
+    clean_existing_files(AI_DIR, "aiessays_ai")
+    
+    # Process human
+    human_count = 0
+    data_batch = []
+    batch_idx = 0
+    
+    for _, row in tqdm(human_df.iterrows(), total=len(human_df), desc="AI Essays (Human)"):
+        text = str(row[text_col])
+        if len(text.split()) < 100:
+            continue
+        data_batch.append({'text': text, 'source': 'aiessays_human', 'label': 0})
+        human_count += 1
+        if len(data_batch) >= batch_size:
+            save_batch(data_batch, HUMAN_DIR, "aiessays_human", batch_idx)
+            data_batch = []
+            batch_idx += 1
+    if data_batch:
+        save_batch(data_batch, HUMAN_DIR, "aiessays_human", batch_idx)
+    
+    # Process AI
+    ai_count = 0
+    data_batch = []
+    batch_idx = 0
+    
+    for _, row in tqdm(ai_df.iterrows(), total=len(ai_df), desc="AI Essays (AI)"):
+        text = str(row[text_col])
+        if len(text.split()) < 100:
+            continue
+        data_batch.append({'text': text, 'source': 'aiessays_ai', 'label': 1})
+        ai_count += 1
+        if len(data_batch) >= batch_size:
+            save_batch(data_batch, AI_DIR, "aiessays_ai", batch_idx)
+            data_batch = []
+            batch_idx += 1
+    if data_batch:
+        save_batch(data_batch, AI_DIR, "aiessays_ai", batch_idx)
+    
+    print(f"✅ AI Essays: {human_count} human, {ai_count} AI saved")
+    return human_count, ai_count
+
+# =============================================================================
+# HUGGINGFACE DATASET DOWNLOADERS
+# =============================================================================
+
+def download_wikipedia(limit=100000, batch_size=50000):
+    """Download Wikipedia articles filtered for essay-like content."""
+    print(f"\n{'='*60}")
+    print(f"DOWNLOADING: Wikipedia (Human, limit={limit})")
+    print(f"{'='*60}")
+    
+    if not HF_AVAILABLE:
+        return 0
+    
+    clean_existing_files(HUMAN_DIR, "wikipedia")
+    
+    try:
+        dataset = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
+        
+        data_batch = []
+        count = 0
+        batch_idx = 0
+        
+        pbar = tqdm(total=limit, desc="Wikipedia")
+        
+        for sample in dataset:
+            if count >= limit:
+                break
+            
+            text = sample.get('text', '')
+            
+            # Filter for essay-like articles (relaxed for Wikipedia)
+            if not is_essay_like(text, min_words=400, max_words=5000, min_paragraphs=3):
+                continue
+            
+            # Skip list-heavy articles
+            if text.count('\n*') > 10 or text.count('\n-') > 10:
+                continue
+            
+            data_batch.append({'text': text, 'source': 'wikipedia', 'label': 0})
+            count += 1
+            pbar.update(1)
+            
+            if len(data_batch) >= batch_size:
+                save_batch(data_batch, HUMAN_DIR, "wikipedia", batch_idx)
+                data_batch = []
+                batch_idx += 1
+                gc.collect()
+        
+        if data_batch:
+            save_batch(data_batch, HUMAN_DIR, "wikipedia", batch_idx)
+        
+        pbar.close()
+        print(f"✅ Wikipedia: {count} articles saved")
+        return count
+        
+    except Exception as e:
+        print(f"❌ Wikipedia failed: {e}")
+        return 0
+
+
+def download_fineweb_edu(limit=100000, batch_size=50000):
+    """Download FineWeb-Edu filtered for essay-like content."""
+    print(f"\n{'='*60}")
+    print(f"DOWNLOADING: FineWeb-Edu (Human, limit={limit})")
+    print(f"{'='*60}")
+    
+    if not HF_AVAILABLE:
+        return 0
+    
+    clean_existing_files(HUMAN_DIR, "fineweb")
+    
+    try:
+        dataset = load_dataset("HuggingFaceFW/fineweb-edu", "sample-10BT", split="train", streaming=True)
+        
+        data_batch = []
+        count = 0
+        batch_idx = 0
+        
+        pbar = tqdm(total=limit, desc="FineWeb-Edu")
+        
+        for sample in dataset:
+            if count >= limit:
+                break
+            
+            text = sample.get('text', '')
+            
+            if not is_essay_like(text, min_words=300, max_words=4000, min_paragraphs=3):
+                continue
+            
+            data_batch.append({'text': text, 'source': 'fineweb_edu', 'label': 0})
+            count += 1
+            pbar.update(1)
+            
+            if len(data_batch) >= batch_size:
+                save_batch(data_batch, HUMAN_DIR, "fineweb", batch_idx)
+                data_batch = []
+                batch_idx += 1
+                gc.collect()
+        
+        if data_batch:
+            save_batch(data_batch, HUMAN_DIR, "fineweb", batch_idx)
+        
+        pbar.close()
+        print(f"✅ FineWeb-Edu: {count} samples saved")
+        return count
+        
+    except Exception as e:
+        print(f"❌ FineWeb-Edu failed: {e}")
+        return 0
+
+
+def download_ivypanda(limit=50000, batch_size=25000):
+    """Download IvyPanda essays - college student essays."""
+    print(f"\n{'='*60}")
+    print(f"DOWNLOADING: IvyPanda (Human College Essays, limit={limit})")
+    print(f"{'='*60}")
+    
+    if not HF_AVAILABLE:
+        return 0
     
     clean_existing_files(HUMAN_DIR, "ivypanda")
     
     try:
         ds = load_dataset("qwedsacf/ivypanda-essays", split="train", streaming=True)
-        batch = []
+        
+        data_batch = []
         count = 0
         batch_idx = 0
         
-        for row in tqdm(ds, desc="IvyPanda"):
-            if count >= limit: break
+        for row in tqdm(ds, desc="IvyPanda", total=limit):
+            if count >= limit:
+                break
             
-            # Smart text detection + Cleaning
             text_raw = row.get('text') or row.get('TEXT') or row.get('essay')
-            if not text_raw: continue
+            if not text_raw:
+                continue
             
             text = clean_essay_references(text_raw)
-            if len(text.split()) < 100: continue
+            if len(text.split()) < 100:
+                continue
             
-            batch.append({'text': text, 'source': 'ivypanda', 'label': 0})
+            data_batch.append({'text': text, 'source': 'ivypanda', 'label': 0})
             count += 1
             
-            if len(batch) >= 10000:
-                save_batch(batch, HUMAN_DIR, "ivypanda", batch_idx)
-                batch = []
+            if len(data_batch) >= batch_size:
+                save_batch(data_batch, HUMAN_DIR, "ivypanda", batch_idx)
+                data_batch = []
                 batch_idx += 1
         
-        if batch: save_batch(batch, HUMAN_DIR, "ivypanda", batch_idx)
+        if data_batch:
+            save_batch(data_batch, HUMAN_DIR, "ivypanda", batch_idx)
+        
         print(f"✅ IvyPanda: {count} essays saved")
         return count
+        
     except Exception as e:
         print(f"❌ IvyPanda failed: {e}")
         return 0
 
-def download_fineweb_edu(limit=150000):
-    """
-    Downloads FineWeb-Edu. 
-    We INCREASED the limit here to replace ArXiv/Wiki.
-    """
-    print(f"\n{'='*60}\nDOWNLOADING: FineWeb-Edu (Academic Web)\n{'='*60}")
-    if not HF_AVAILABLE: return 0
+
+def download_cosmopedia(limit=150000, batch_size=50000):
+    """Download Cosmopedia - synthetic textbooks/stories (AI-generated)."""
+    print(f"\n{'='*60}")
+    print(f"DOWNLOADING: Cosmopedia (AI, limit={limit})")
+    print(f"{'='*60}")
     
-    clean_existing_files(HUMAN_DIR, "fineweb")
+    if not HF_AVAILABLE:
+        return 0
+    
+    clean_existing_files(AI_DIR, "cosmopedia")
+    
+    # Most essay-like subsets (removed 'stories' - children's fiction not argumentative essays)
+    subsets = ['stanford', 'web_samples_v2']
+    per_subset_limit = limit // len(subsets)
+    
+    total_count = 0
+    batch_idx = 0
+    
+    for subset in subsets:
+        print(f"\n→ Loading Cosmopedia/{subset}...")
+        
+        try:
+            dataset = load_dataset("HuggingFaceTB/cosmopedia", subset, split="train", streaming=True)
+            
+            data_batch = []
+            count = 0
+            
+            pbar = tqdm(total=per_subset_limit, desc=f"Cosmopedia/{subset}")
+            
+            for sample in dataset:
+                if count >= per_subset_limit:
+                    break
+                
+                text = sample.get('text', '')
+                
+                if not is_essay_like(text, min_words=300, max_words=4000, min_paragraphs=3):
+                    continue
+                
+                data_batch.append({'text': text, 'source': f'cosmopedia_{subset}', 'label': 1})
+                count += 1
+                pbar.update(1)
+                
+                if len(data_batch) >= batch_size:
+                    save_batch(data_batch, AI_DIR, "cosmopedia", batch_idx)
+                    data_batch = []
+                    batch_idx += 1
+                    gc.collect()
+            
+            if data_batch:
+                save_batch(data_batch, AI_DIR, "cosmopedia", batch_idx)
+                data_batch = []
+                batch_idx += 1
+            
+            pbar.close()
+            total_count += count
+            print(f"  ✓ {subset}: {count} samples")
+            
+        except Exception as e:
+            print(f"  ✗ {subset} failed: {e}")
+    
+    print(f"✅ Cosmopedia total: {total_count} samples saved")
+    return total_count
+
+
+def download_lmsys(limit=50000, batch_size=50000):
+    """Download LMSYS Chat-1M filtered for essay-like AI responses."""
+    print(f"\n{'='*60}")
+    print(f"DOWNLOADING: LMSYS Chat-1M (AI, limit={limit})")
+    print(f"{'='*60}")
+    
+    if not HF_AVAILABLE:
+        return 0
+    
+    clean_existing_files(AI_DIR, "lmsys")
     
     try:
-        # Use sample-10BT for speed, it's high quality enough
-        ds = load_dataset("HuggingFaceFW/fineweb-edu", "sample-10BT", split="train", streaming=True)
-        batch = []
+        dataset = load_dataset("lmsys/lmsys-chat-1m", split="train", streaming=True)
+        
+        data_batch = []
         count = 0
         batch_idx = 0
         
-        for row in tqdm(ds, desc="FineWeb"):
-            if count >= limit: break
+        pbar = tqdm(total=limit, desc="LMSYS")
+        
+        for sample in dataset:
+            if count >= limit:
+                break
             
-            text = row.get('text', '')
-            # Filter for reasonably long, essay-like content
-            if len(text.split()) < 300: continue
+            if sample.get('language') != 'English':
+                continue
             
-            # Basic marker check to ensure it's not just a chat log
-            if "copyright" in text.lower()[:50]: continue 
+            conv = sample.get('conversation', [])
             
-            batch.append({'text': text, 'source': 'fineweb', 'label': 0})
-            count += 1
-            
-            if len(batch) >= 25000:
-                save_batch(batch, HUMAN_DIR, "fineweb", batch_idx)
-                batch = []
-                batch_idx += 1
+            for turn in conv:
+                if turn['role'] != 'assistant':
+                    continue
                 
-        if batch: save_batch(batch, HUMAN_DIR, "fineweb", batch_idx)
-        print(f"✅ FineWeb: {count} samples saved")
+                text = turn.get('content', '')
+                
+                # Skip non-essay content (travel guides, business descriptions, etc.)
+                if has_non_essay_patterns(text):
+                    continue
+                
+                # Strict filtering for chat data
+                if not is_essay_like(text, min_words=300, max_words=3000,
+                                    min_paragraphs=3, strict=True):
+                    continue
+                
+                data_batch.append({'text': text, 'source': 'lmsys', 'label': 1})
+                count += 1
+                pbar.update(1)
+                
+                if count >= limit:
+                    break
+            
+            if len(data_batch) >= batch_size:
+                save_batch(data_batch, AI_DIR, "lmsys", batch_idx)
+                data_batch = []
+                batch_idx += 1
+                gc.collect()
+        
+        if data_batch:
+            save_batch(data_batch, AI_DIR, "lmsys", batch_idx)
+        
+        pbar.close()
+        print(f"✅ LMSYS: {count} essay-like responses saved")
         return count
+        
     except Exception as e:
-        print(f"❌ FineWeb failed: {e}")
+        print(f"❌ LMSYS failed: {e}")
         return 0
 
-# (Re-use your existing AI downloaders for Cosmopedia/LMSYS)
-def download_cosmopedia(limit=100000):
-    print(f"\n{'='*60}\nDOWNLOADING: Cosmopedia (AI Textbooks)\n{'='*60}")
-    clean_existing_files(AI_DIR, "cosmopedia")
+
+def download_wildchat(limit=50000, batch_size=50000):
+    """Download WildChat filtered for essay-like AI responses."""
+    print(f"\n{'='*60}")
+    print(f"DOWNLOADING: WildChat (AI, limit={limit})")
+    print(f"{'='*60}")
+    
+    if not HF_AVAILABLE:
+        return 0
+    
+    clean_existing_files(AI_DIR, "wildchat")
+    
     try:
-        # 'stanford' and 'stories' are the best subsets
-        ds = load_dataset("HuggingFaceTB/cosmopedia", "stanford", split="train", streaming=True)
-        batch = []
+        dataset = load_dataset("allenai/WildChat", split="train", streaming=True)
+        
+        data_batch = []
         count = 0
         batch_idx = 0
-        for row in tqdm(ds, desc="Cosmopedia"):
-            if count >= limit: break
-            batch.append({'text': row['text'], 'source': 'cosmopedia', 'label': 1})
-            count += 1
-            if len(batch) >= 25000:
-                save_batch(batch, AI_DIR, "cosmopedia", batch_idx)
-                batch = []
-                batch_idx += 1
-        if batch: save_batch(batch, AI_DIR, "cosmopedia", batch_idx)
-        return count
-    except: return 0
-
-def download_lmsys(limit=50000):
-    print(f"\n{'='*60}\nDOWNLOADING: LMSYS (AI Chat)\n{'='*60}")
-    clean_existing_files(AI_DIR, "lmsys")
-    try:
-        ds = load_dataset("lmsys/lmsys-chat-1m", split="train", streaming=True)
-        batch = []
-        count = 0
-        idx = 0
-        for row in tqdm(ds, desc="LMSYS"):
-            if count >= limit: break
-            if row['language'] != 'English': continue
-            # Find assistant response
-            for turn in row['conversation']:
-                if turn['role'] == 'assistant' and len(turn['content'].split()) > 200:
-                    batch.append({'text': turn['content'], 'source': 'lmsys', 'label': 1})
-                    count += 1
+        
+        pbar = tqdm(total=limit, desc="WildChat")
+        
+        for sample in dataset:
+            if count >= limit:
+                break
+            
+            conv = sample.get('conversation', [])
+            
+            for turn in conv:
+                if turn['role'] != 'assistant':
+                    continue
+                
+                text = turn.get('content', '')
+                
+                # Skip non-essay content (travel guides, business descriptions, etc.)
+                if has_non_essay_patterns(text):
+                    continue
+                
+                # Strict filtering for chat data
+                if not is_essay_like(text, min_words=300, max_words=3000,
+                                    min_paragraphs=3, strict=True):
+                    continue
+                
+                data_batch.append({'text': text, 'source': 'wildchat', 'label': 1})
+                count += 1
+                pbar.update(1)
+                
+                if count >= limit:
                     break
-            if len(batch) >= 25000:
-                save_batch(batch, AI_DIR, "lmsys", idx)
-                batch = []
-                idx += 1
-        if batch: save_batch(batch, AI_DIR, "lmsys", idx)
+            
+            if len(data_batch) >= batch_size:
+                save_batch(data_batch, AI_DIR, "wildchat", batch_idx)
+                data_batch = []
+                batch_idx += 1
+                gc.collect()
+        
+        if data_batch:
+            save_batch(data_batch, AI_DIR, "wildchat", batch_idx)
+        
+        pbar.close()
+        print(f"✅ WildChat: {count} essay-like responses saved")
         return count
-    except: return 0
+        
+    except Exception as e:
+        print(f"❌ WildChat failed: {e}")
+        return 0
 
 # =============================================================================
-# MAIN
+# MAIN ORCHESTRATOR
 # =============================================================================
 
-if __name__ == "__main__":
+def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=None,
+                 skip_kaggle=False, auto_kaggle=True):
+    """
+    Download all sources with balanced targets.
+    
+    Data Distribution:
+        HUMAN (~target_per_class):
+            - PERSUADE: ~25k (Kaggle)
+            - AI Essays (human): variable (Kaggle)
+            - Wikipedia: ~50k
+            - FineWeb-Edu: ~75k
+            - IvyPanda: ~50k
+        
+        AI (~target_per_class):
+            - AI Essays (AI): variable (Kaggle)
+            - Cosmopedia: ~100k
+            - LMSYS: ~50k
+            - WildChat: ~50k
+    """
+    print("=" * 70)
+    print("ESSAY-FOCUSED DATA DOWNLOAD (V4)")
+    print(f"Target: ~{target_per_class:,} samples per class")
+    print("=" * 70)
+    
     ensure_dirs()
     
-    # 1. Parse Local Kaggle Files (Persuade) - KEEP THIS
-    # (Assuming you run this with --persuade argument or have the file)
-    # We skip re-implementing the Kaggle parser here for brevity, 
-    # but you should keep the 'parse_persuade_dataset' from your old script.
+    stats = {'human': {}, 'ai': {}}
     
-    # 2. Download New Data
-    print("--- 🚀 STARTING V3 DOWNLOAD ---")
+    # =========================================================================
+    # KAGGLE DATASETS
+    # =========================================================================
     
-    # HUMAN: Persuade (Local) + IvyPanda (College) + FineWeb (Academic)
-    # Target: ~200k Human
-    download_ivypanda(limit=40000)      # The Bridge (College)
-    download_fineweb_edu(limit=160000)  # The Expert (replaces ArXiv/Wiki)
+    if not skip_kaggle:
+        # Auto-download if paths not provided
+        if auto_kaggle and KAGGLE_AVAILABLE:
+            kaggle_raw_dir = DATA_DIR / "raw_kaggle"
+            
+            if not persuade_path:
+                p_file = download_kaggle_dataset(
+                    'julesking/tla-lab-persuade-dataset', 
+                    kaggle_raw_dir / "persuade"
+                )
+                if p_file:
+                    persuade_path = str(p_file)
+            
+            if not ai_essays_path:
+                a_file = download_kaggle_dataset(
+                    'denvermagtibay/ai-generated-essays-dataset',
+                    kaggle_raw_dir / "ai_essays"
+                )
+                if a_file:
+                    ai_essays_path = str(a_file)
+        
+        if persuade_path:
+            stats['human']['persuade'] = parse_persuade_dataset(persuade_path)
+        
+        if ai_essays_path:
+            h, a = parse_ai_essays_dataset(ai_essays_path)
+            stats['human']['ai_essays_human'] = h
+            stats['ai']['ai_essays_ai'] = a
     
-    # AI: Cosmopedia (Textbook) + LMSYS (Chat)
-    # Target: ~200k AI
-    download_cosmopedia(limit=150000)   # The "Smart" AI
-    download_lmsys(limit=50000)         # The "Chatty" AI
+    # =========================================================================
+    # HUGGINGFACE DATASETS
+    # =========================================================================
     
-    print("\n✅ Download Complete. Ready for V3 Training.")
+    if HF_AVAILABLE:
+        human_from_kaggle = sum(stats['human'].values())
+        ai_from_kaggle = sum(stats['ai'].values())
+        
+        human_remaining = max(0, target_per_class - human_from_kaggle)
+        ai_remaining = max(0, target_per_class - ai_from_kaggle)
+        
+        print(f"\nKaggle data: {human_from_kaggle} human, {ai_from_kaggle} AI")
+        print(f"Remaining target: {human_remaining} human, {ai_remaining} AI")
+        
+        # HUMAN SOURCES
+        if human_remaining > 0:
+            wiki_limit = min(human_remaining // 4, 75000)
+            fineweb_limit = min(human_remaining // 3, 100000)
+            ivypanda_limit = human_remaining - wiki_limit - fineweb_limit
+            
+            stats['human']['wikipedia'] = download_wikipedia(limit=wiki_limit)
+            stats['human']['fineweb_edu'] = download_fineweb_edu(limit=fineweb_limit)
+            stats['human']['ivypanda'] = download_ivypanda(limit=ivypanda_limit)
+        
+        # AI SOURCES
+        if ai_remaining > 0:
+            cosmo_limit = min(ai_remaining // 2, 150000)
+            lmsys_limit = min(ai_remaining // 4, 50000)
+            wildchat_limit = ai_remaining - cosmo_limit - lmsys_limit
+            
+            stats['ai']['cosmopedia'] = download_cosmopedia(limit=cosmo_limit)
+            stats['ai']['lmsys'] = download_lmsys(limit=lmsys_limit)
+            stats['ai']['wildchat'] = download_wildchat(limit=wildchat_limit)
+    
+    # =========================================================================
+    # SUMMARY
+    # =========================================================================
+    
+    print("\n" + "=" * 70)
+    print("DOWNLOAD COMPLETE - SUMMARY")
+    print("=" * 70)
+    
+    human_total = sum(stats['human'].values())
+    ai_total = sum(stats['ai'].values())
+    
+    print("\n📊 HUMAN DATA (label=0):")
+    for source, count in stats['human'].items():
+        pct = (count / human_total * 100) if human_total > 0 else 0
+        print(f"   {source:20} {count:>8,} ({pct:5.1f}%)")
+    print(f"   {'TOTAL':20} {human_total:>8,}")
+    
+    print("\n🤖 AI DATA (label=1):")
+    for source, count in stats['ai'].items():
+        pct = (count / ai_total * 100) if ai_total > 0 else 0
+        print(f"   {source:20} {count:>8,} ({pct:5.1f}%)")
+    print(f"   {'TOTAL':20} {ai_total:>8,}")
+    
+    print(f"\n📁 Output: {DATA_DIR.resolve()}")
+    
+    if human_total > 0 and ai_total > 0:
+        ratio = human_total / ai_total
+        status = "✅ balanced" if 0.8 <= ratio <= 1.2 else "⚠️ imbalanced"
+        print(f"Balance: {status} (ratio: {ratio:.2f})")
+    
+    return stats
+
+# =============================================================================
+# CLI
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Download essay-focused data for AI detection training (V4)",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument("--target", type=int, default=200000,
+                        help="Target samples per class (default: 200000)")
+    parser.add_argument("--persuade", type=str, default=None,
+                        help="Path to PERSUADE dataset CSV/Parquet")
+    parser.add_argument("--ai-essays", type=str, default=None,
+                        help="Path to AI Generated Essays dataset")
+    parser.add_argument("--skip-kaggle", action="store_true",
+                        help="Skip Kaggle datasets, HuggingFace only")
+    parser.add_argument("--no-auto-kaggle", action="store_true",
+                        help="Don't auto-download Kaggle datasets")
+    
+    args = parser.parse_args()
+    
+    download_all(
+        target_per_class=args.target,
+        persuade_path=args.persuade,
+        ai_essays_path=args.ai_essays,
+        skip_kaggle=args.skip_kaggle,
+        auto_kaggle=not args.no_auto_kaggle
+    )
+
+
+if __name__ == "__main__":
+    main()
