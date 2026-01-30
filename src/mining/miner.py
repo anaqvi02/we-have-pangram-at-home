@@ -1,3 +1,8 @@
+import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from src.config import Config
+from src.data.indexing import VectorIndexer
 import gc
 import torch.amp as amp
 
@@ -22,9 +27,7 @@ class HardNegativeMiner:
         self.model.eval()
         hard_negatives = [] # List of text strings
         
-        # Create a simple loader for the human text
-        # We assume human_dataset[i] returns {'text': str, 'label': 0}
-        
+        # Create an optimized loader for the human text
         loader = DataLoader(
             human_dataset, 
             batch_size=batch_size, 
@@ -52,7 +55,7 @@ class HardNegativeMiner:
                     for idx in fp_indices:
                         hard_negatives.append(texts[idx])
                     
-                    # Early Exit Strategy
+                    # Early Exit Strategy (inside the batch loop)
                     if len(hard_negatives) >= max_negatives:
                         print(f"Reached limit of {max_negatives} hard negatives. Stopping early.")
                         break
@@ -62,14 +65,8 @@ class HardNegativeMiner:
         if not hard_negatives:
             return []
             
-        # 2. Retrieve Static Mirrors
+        # 2. Retrieve Static Mirrors from AI Index
         print("Retrieving Static Mirrors from AI Index...")
-        # We might need to batch this if hard_negatives is huge, but usually it's manageable
-        
-        # Encode hard negatives to get query vectors
-        # Note: VectorIndexer uses sentence-transformers, self.model is DeBERTa classifier.
-        # They are different models!
-        
         retrieved_mirrors = self.indexer.search(hard_negatives, top_k=top_k)
         
         new_batch = []
