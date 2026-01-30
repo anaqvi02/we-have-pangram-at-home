@@ -86,7 +86,7 @@ class PangramTrainer:
                 if self.device == 'mps' and step % 100 == 0:
                     torch.mps.empty_cache()
                     
-        return dataset
+        return dataset # Return dataset for continuity
 
     def evaluate(self, dataset):
         """Run evaluation on a held-out dataset."""
@@ -135,6 +135,7 @@ class PangramTrainer:
         best_val_loss = float('inf')
         log_file = Config.PROJECT_ROOT / "training_log.csv"
         
+        # Initialize log header
         if not log_file.exists():
             with open(log_file, "w") as f:
                 f.write("epoch,train_loss,val_loss,val_acc,dataset_size\n")
@@ -151,18 +152,22 @@ class PangramTrainer:
                 val_loss, val_acc = self.evaluate(val_dataset)
                 print(f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
                 
+                # Save Best Model
                 if val_loss < best_val_loss:
                     print(f"New Best Model! (Loss: {val_loss:.4f})")
                     best_val_loss = val_loss
                     best_dir = Config.CHECKPOINT_DIR / "pangram_best"
                     self.save_checkpoint(best_dir)
 
+            # Log to CSV
             with open(log_file, "a") as f:
                  f.write(f"{epoch},0.0,{val_loss:.4f},{val_acc:.4f},{len(current_train_data)}\n")
 
             # 3. Mine
             print(f"--- Epoch {epoch} Mining ---")
             
+            # We treat the 'human_eval_pool' as the source for mining hard negatives
+            # Optimization: Subsample the pool to keep mining time reasonable
             import random
             miner_pool_size = 60000
             pool_len = len(human_eval_pool)
@@ -171,24 +176,29 @@ class PangramTrainer:
                 sampled_indices = random.sample(range(pool_len), miner_pool_size)
                 current_pool = [human_eval_pool[i] for i in sampled_indices]
             else:
+                # Convert to list if it's not already a sequence to ensure stability
                 if isinstance(human_eval_pool, list):
                     current_pool = human_eval_pool
                 else:
                     current_pool = [human_eval_pool[i] for i in range(pool_len)]
 
             human_ds = StreamingTextDataset(current_pool, tokenizer=self.tokenizer)
+            
+            # Efficient Mining with Early Exit
             new_pairs = self.miner.mine(human_ds, max_negatives=50000)
             
             if len(new_pairs) == 0:
                 print("No hard negatives found. Stopping curriculum early.")
                 break
                 
-            # 4. Augment
+            # 3. Augment
+            # New optimization: Tokenize immediately and extend the tensor dataset
             if hasattr(current_train_data, 'extend'):
                 print(f"Augmenting PretokenizedDataset with {len(new_pairs)} new samples...")
                 texts = [p['text'] for p in new_pairs]
                 labels = [p['label'] for p in new_pairs]
                 
+                # Tokenize new batch
                 encodings = self.tokenizer(
                     texts,
                     truncation=True,
@@ -197,6 +207,7 @@ class PangramTrainer:
                     return_tensors="pt"
                 )
                 
+                # Create mini dataset
                 from src.data.loader import PretokenizedDataset
                 new_ds = PretokenizedDataset(
                     encodings['input_ids'],
@@ -208,12 +219,17 @@ class PangramTrainer:
                 print(f"Dataset Size grew to {len(current_train_data)}")
                 
             elif isinstance(current_train_data.data_source, list):
+                # Legacy path for tests
                 current_train_data.data_source.extend(new_pairs)
                 print(f"Dataset Size grew to {len(current_train_data)}")
+            else:
+                print("Warning: Dataset augmentation not supported for this type.")
             
             # --- Auto-Save Checkpoint ---
             checkpoint_dir = Config.CHECKPOINT_DIR / f"pangram_epoch_{epoch+1}"
             self.save_checkpoint(checkpoint_dir)
+            
+            # Also update 'latest'
             latest_dir = Config.CHECKPOINT_DIR / "pangram_latest"
             self.save_checkpoint(latest_dir)
 
@@ -225,6 +241,7 @@ class PangramTrainer:
             self.model.save_pretrained(path)
             self.tokenizer.save_pretrained(path)
             
+            # Verify
             if self.verify_checkpoint(path):
                 print(f"✅ Checkpoint verified at {path}")
             else:
@@ -232,14 +249,19 @@ class PangramTrainer:
                 
         except Exception as e:
             print(f"❌ Failed to save/verify checkpoint to {path}: {e}")
+            
+            # Fallback to local
             fallback_path = Config.PROJECT_ROOT / "local_backups" / path.name
             print(f"⚠️  Attempting fallback save to {fallback_path}...")
             try:
                 fallback_path.mkdir(parents=True, exist_ok=True)
                 self.model.save_pretrained(fallback_path)
                 self.tokenizer.save_pretrained(fallback_path)
+                
                 if self.verify_checkpoint(fallback_path):
                      print(f"✅ Fallback save successful and verified.")
+                else:
+                     print(f"❌ Fallback saved but failed verification!")
             except Exception as e2:
                 print(f"❌ FATAL: Fallback save also failed: {e2}")
 
@@ -250,13 +272,20 @@ class PangramTrainer:
         
         for f in required_files:
             file_path = path / f
-            if not file_path.exists() or file_path.stat().st_size == 0:
+            if not file_path.exists():
+                print(f"⚠️ Verification Error: Missing {f}")
+                return False
+            if file_path.stat().st_size == 0:
+                print(f"⚠️ Verification Error: Empty file {f}")
                 return False
                 
+        # Optional: Try lightweight loading (Config/Tokenizer only to avoid heavy VRAM)
         try:
             from transformers import AutoConfig, AutoTokenizer
             AutoConfig.from_pretrained(path)
             AutoTokenizer.from_pretrained(path)
-        except:
+        except Exception as e:
+             print(f"⚠️ Verification Error: Corrupt config/tokenizer: {e}")
              return False
+             
         return True
