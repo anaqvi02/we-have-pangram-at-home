@@ -13,7 +13,7 @@ Data Sources:
     
     AI (label=1):
         - AI Essays Dataset: AI-generated subset [Kaggle]
-        - Cosmopedia: Synthetic textbooks/stories [HuggingFace]
+        - Cosmopedia/stanford: Synthetic textbooks/stories [HuggingFace]
         - LMSYS Chat-1M: LLM responses (filtered) [HuggingFace]
         - WildChat: ChatGPT responses (filtered) [HuggingFace]
 
@@ -464,7 +464,7 @@ def download_kaggle_dataset(dataset_id, dest_dir):
 def parse_persuade_dataset(input_path, batch_size=50000):
     """
     Parse the PERSUADE dataset - Human student essays (grades 6-12).
-    Dataset: https://www.kaggle.com/datasets/julesking/tla-lab-persuade-dataset
+    Dataset: https://www.kaggle.com/datasets/nbroad/persaude-corpus-2
     """
     print(f"\n{'='*60}")
     print("PARSING: PERSUADE Dataset (Human Essays)")
@@ -527,7 +527,7 @@ def parse_persuade_dataset(input_path, batch_size=50000):
 def parse_ai_essays_dataset(input_path, batch_size=50000):
     """
     Parse AI Generated Essays dataset - contains BOTH human and AI essays.
-    Dataset: https://www.kaggle.com/datasets/denvermagtibay/ai-generated-essays-dataset
+    Dataset: https://www.kaggle.com/datasets/shanegerami/ai-vs-human-text
     """
     print(f"\n{'='*60}")
     print("PARSING: AI Essays Dataset (Human + AI)")
@@ -594,62 +594,6 @@ def parse_ai_essays_dataset(input_path, batch_size=50000):
 # =============================================================================
 # HUGGINGFACE DATASET DOWNLOADERS
 # =============================================================================
-
-def download_wikipedia(limit=100000, batch_size=50000):
-    """Download Wikipedia articles filtered for essay-like content."""
-    print(f"\n{'='*60}")
-    print(f"DOWNLOADING: Wikipedia (Human, limit={limit})")
-    print(f"{'='*60}")
-    
-    if not HF_AVAILABLE:
-        return 0
-    
-    clean_existing_files(HUMAN_DIR, "wikipedia")
-    
-    try:
-        dataset = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
-        
-        data_batch = []
-        count = 0
-        batch_idx = 0
-        
-        pbar = tqdm(total=limit, desc="Wikipedia")
-        
-        for sample in dataset:
-            if count >= limit:
-                break
-            
-            text = sample.get('text', '')
-            
-            # Filter for essay-like articles (relaxed for Wikipedia)
-            if not is_essay_like(text, min_words=400, max_words=5000, min_paragraphs=3):
-                continue
-            
-            # Skip list-heavy articles
-            if text.count('\n*') > 10 or text.count('\n-') > 10:
-                continue
-            
-            data_batch.append({'text': text, 'source': 'wikipedia', 'label': 0})
-            count += 1
-            pbar.update(1)
-            
-            if len(data_batch) >= batch_size:
-                save_batch(data_batch, HUMAN_DIR, "wikipedia", batch_idx)
-                data_batch = []
-                batch_idx += 1
-                gc.collect()
-        
-        if data_batch:
-            save_batch(data_batch, HUMAN_DIR, "wikipedia", batch_idx)
-        
-        pbar.close()
-        print(f"✅ Wikipedia: {count} articles saved")
-        return count
-        
-    except Exception as e:
-        print(f"❌ Wikipedia failed: {e}")
-        return 0
-
 
 def download_fineweb_edu(limit=100000, batch_size=50000):
     """Download FineWeb-Edu filtered for essay-like content."""
@@ -754,7 +698,7 @@ def download_ivypanda(limit=50000, batch_size=25000):
 def download_cosmopedia(limit=150000, batch_size=50000):
     """Download Cosmopedia - synthetic textbooks/stories (AI-generated)."""
     print(f"\n{'='*60}")
-    print(f"DOWNLOADING: Cosmopedia (AI, limit={limit})")
+    print(f"DOWNLOADING: Cosmopedia/stanford (AI, limit={limit})")
     print(f"{'='*60}")
     
     if not HF_AVAILABLE:
@@ -762,54 +706,52 @@ def download_cosmopedia(limit=150000, batch_size=50000):
     
     clean_existing_files(AI_DIR, "cosmopedia")
     
-    # Most essay-like subsets (removed 'stories' - children's fiction not argumentative essays)
-    subsets = ['stanford', 'web_samples_v2']
-    per_subset_limit = limit // len(subsets)
+    # Use only stanford subset (children's stories removed as they're not argumentative essays)
+    subset = 'stanford'
     
     total_count = 0
     batch_idx = 0
     
-    for subset in subsets:
-        print(f"\n→ Loading Cosmopedia/{subset}...")
+    print(f"\n→ Loading Cosmopedia/{subset}...")
+    
+    try:
+        dataset = load_dataset("HuggingFaceTB/cosmopedia", subset, split="train", streaming=True)
         
-        try:
-            dataset = load_dataset("HuggingFaceTB/cosmopedia", subset, split="train", streaming=True)
+        data_batch = []
+        count = 0
+        
+        pbar = tqdm(total=limit, desc=f"Cosmopedia/{subset}")
+        
+        for sample in dataset:
+            if count >= limit:
+                break
             
-            data_batch = []
-            count = 0
+            text = sample.get('text', '')
             
-            pbar = tqdm(total=per_subset_limit, desc=f"Cosmopedia/{subset}")
+            if not is_essay_like(text, min_words=300, max_words=4000, min_paragraphs=3):
+                continue
             
-            for sample in dataset:
-                if count >= per_subset_limit:
-                    break
-                
-                text = sample.get('text', '')
-                
-                if not is_essay_like(text, min_words=300, max_words=4000, min_paragraphs=3):
-                    continue
-                
-                data_batch.append({'text': text, 'source': f'cosmopedia_{subset}', 'label': 1})
-                count += 1
-                pbar.update(1)
-                
-                if len(data_batch) >= batch_size:
-                    save_batch(data_batch, AI_DIR, "cosmopedia", batch_idx)
-                    data_batch = []
-                    batch_idx += 1
-                    gc.collect()
+            data_batch.append({'text': text, 'source': f'cosmopedia_{subset}', 'label': 1})
+            count += 1
+            pbar.update(1)
             
-            if data_batch:
+            if len(data_batch) >= batch_size:
                 save_batch(data_batch, AI_DIR, "cosmopedia", batch_idx)
                 data_batch = []
                 batch_idx += 1
-            
-            pbar.close()
-            total_count += count
-            print(f"  ✓ {subset}: {count} samples")
-            
-        except Exception as e:
-            print(f"  ✗ {subset} failed: {e}")
+                gc.collect()
+        
+        if data_batch:
+            save_batch(data_batch, AI_DIR, "cosmopedia", batch_idx)
+            data_batch = []
+            batch_idx += 1
+        
+        pbar.close()
+        total_count += count
+        print(f"  ✓ {subset}: {count} samples")
+        
+    except Exception as e:
+        print(f"  ✗ {subset} failed: {e}")
     
     print(f"✅ Cosmopedia total: {total_count} samples saved")
     return total_count
@@ -962,13 +904,12 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         HUMAN (~target_per_class):
             - PERSUADE: ~25k (Kaggle)
             - AI Essays (human): variable (Kaggle)
-            - Wikipedia: ~50k
-            - FineWeb-Edu: ~75k
-            - IvyPanda: ~50k
+            - FineWeb-Edu: ~100k
+            - IvyPanda: ~75k
         
         AI (~target_per_class):
             - AI Essays (AI): variable (Kaggle)
-            - Cosmopedia: ~100k
+            - Cosmopedia/stanford: ~100k
             - LMSYS: ~50k
             - WildChat: ~50k
     """
@@ -992,7 +933,7 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
             
             if not persuade_path:
                 p_file = download_kaggle_dataset(
-                    'julesking/tla-lab-persuade-dataset', 
+                    'nbroad/persaude-corpus-2',
                     kaggle_raw_dir / "persuade"
                 )
                 if p_file:
@@ -1000,7 +941,7 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
             
             if not ai_essays_path:
                 a_file = download_kaggle_dataset(
-                    'denvermagtibay/ai-generated-essays-dataset',
+                    'shanegerami/ai-vs-human-text',
                     kaggle_raw_dir / "ai_essays"
                 )
                 if a_file:
@@ -1030,11 +971,10 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         
         # HUMAN SOURCES
         if human_remaining > 0:
-            wiki_limit = min(human_remaining // 4, 75000)
-            fineweb_limit = min(human_remaining // 3, 100000)
-            ivypanda_limit = human_remaining - wiki_limit - fineweb_limit
+            # Split remaining between FineWeb-Edu and IvyPanda (no Wikipedia)
+            fineweb_limit = min(human_remaining // 2, 100000)
+            ivypanda_limit = human_remaining - fineweb_limit
             
-            stats['human']['wikipedia'] = download_wikipedia(limit=wiki_limit)
             stats['human']['fineweb_edu'] = download_fineweb_edu(limit=fineweb_limit)
             stats['human']['ivypanda'] = download_ivypanda(limit=ivypanda_limit)
         
