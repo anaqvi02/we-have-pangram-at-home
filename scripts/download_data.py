@@ -1,34 +1,34 @@
 """
-Essay-Focused Data Download Script for AI Detection Training (V4)
+Essay-Focused Data Download Script for AI Detection Training (V4 - Hard Cap Balancer)
 
 This script downloads and filters data from multiple sources to create a balanced
 dataset specifically for training an AI detector on English essays.
 
-Data Sources:
+HARD CAP SYSTEM (ensures diversity):
+    Each data source has a maximum cap as a percentage of the total target:
+    
     HUMAN (label=0):
-        - PERSUADE: Student argumentative essays (grades 6-12) [Kaggle]
-        - AI Essays Dataset: Human subset [Kaggle]
-        - FineWeb-Edu: Educational web content [HuggingFace]
-        - IvyPanda: College student essays [HuggingFace]
+        - PERSUADE: 30% max (student essays grades 6-12) [Kaggle]
+        - AI Essays Dataset: 30% max (human subset) [Kaggle]
+        - FineWeb-Edu: 35% max (educational web content) [HuggingFace]
+        - IvyPanda: 25% max (college student essays) [HuggingFace]
     
     AI (label=1):
-        - AI Essays Dataset: AI-generated subset [Kaggle]
-        - Cosmopedia/stanford: Synthetic textbooks/stories [HuggingFace]
-        - LMSYS Chat-1M: LLM responses (filtered) [HuggingFace]
-        - WildChat: ChatGPT responses (filtered) [HuggingFace]
-
+        - AI Essays Dataset: 30% max (AI-generated subset) [Kaggle]
+        - Cosmopedia/stanford: 35% max (synthetic textbooks/stories) [HuggingFace]
+        - LMSYS Chat-1M: 25% max (LLM responses, filtered) [HuggingFace]
+        - WildChat: 25% max (ChatGPT responses, filtered) [HuggingFace]
+    
+    This ensures no single source dominates and maintains dataset diversity.
 
 Usage:
-    # Download all sources with default limits
+    # Download all sources with default limits (200k per class)
     python download_data.py
 
-    # Custom target per class
+    # Custom target per class (caps scale proportionally)
     python download_data.py --target 500000
 
-    # Include Kaggle datasets (requires Kaggle API setup)
-    python download_data.py --persuade /path/to/persuade.csv
-
-    # Skip Kaggle, HuggingFace only
+    # Skip Kaggle datasets (HuggingFace only, still with caps)
     python download_data.py --skip-kaggle
 """
 
@@ -591,6 +591,147 @@ def parse_ai_essays_dataset(input_path, batch_size=50000):
     print(f"✅ AI Essays: {human_count} human, {ai_count} AI saved")
     return human_count, ai_count
 
+
+def parse_persuade_dataset_capped(input_path, cap, batch_size=50000):
+    """
+    Parse PERSUADE dataset with a hard cap on samples.
+    """
+    print(f"\n{'='*60}")
+    print(f"PARSING: PERSUADE Dataset (Human Essays, cap={cap:,})")
+    print(f"{'='*60}")
+    
+    input_path = Path(input_path)
+    if not input_path.exists():
+        print(f"❌ File not found: {input_path}")
+        return 0
+    
+    df = pd.read_csv(input_path) if input_path.suffix == '.csv' else pd.read_parquet(input_path)
+    print(f"Loaded {len(df)} rows. Columns: {list(df.columns)}")
+    
+    # Detect text column
+    text_col = None
+    for candidate in ['full_text', 'text', 'essay_text', 'discourse_text']:
+        if candidate in df.columns:
+            text_col = candidate
+            break
+    
+    if text_col is None:
+        print(f"❌ Could not find text column")
+        return 0
+    
+    # Handle discourse aggregation if needed
+    if text_col == 'discourse_text' and 'essay_id_comp' in df.columns:
+        print("Aggregating discourse elements by essay_id...")
+        df = df.groupby('essay_id_comp')[text_col].apply(' '.join).reset_index()
+        df.columns = ['essay_id', 'text']
+        text_col = 'text'
+    
+    clean_existing_files(HUMAN_DIR, "persuade")
+    
+    data_batch = []
+    count = 0
+    batch_idx = 0
+    
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="PERSUADE"):
+        if count >= cap:
+            print(f"   → Reached cap of {cap:,} samples, stopping.")
+            break
+        
+        text = str(row[text_col])
+        
+        # Light filtering - PERSUADE is already essays
+        if len(text.split()) < 100:
+            continue
+        
+        data_batch.append({'text': text, 'source': 'persuade', 'label': 0})
+        count += 1
+        
+        if len(data_batch) >= batch_size:
+            save_batch(data_batch, HUMAN_DIR, "persuade", batch_idx)
+            data_batch = []
+            batch_idx += 1
+    
+    if data_batch:
+        save_batch(data_batch, HUMAN_DIR, "persuade", batch_idx)
+    
+    print(f"✅ PERSUADE: {count} essays saved (cap was {cap:,})")
+    return count
+
+
+def parse_ai_essays_dataset_capped(input_path, human_cap, ai_cap, batch_size=50000):
+    """
+    Parse AI Generated Essays dataset with hard caps on both human and AI samples.
+    """
+    print(f"\n{'='*60}")
+    print(f"PARSING: AI Essays Dataset (Human cap={human_cap:,}, AI cap={ai_cap:,})")
+    print(f"{'='*60}")
+    
+    input_path = Path(input_path)
+    if not input_path.exists():
+        print(f"❌ File not found: {input_path}")
+        return 0, 0
+    
+    df = pd.read_csv(input_path) if input_path.suffix == '.csv' else pd.read_parquet(input_path)
+    print(f"Loaded {len(df)} rows. Columns: {list(df.columns)}")
+    
+    text_col = 'text' if 'text' in df.columns else 'essay'
+    label_col = 'label' if 'label' in df.columns else 'generated'
+    
+    print(f"Label distribution:\n{df[label_col].value_counts()}")
+    
+    human_df = df[df[label_col] == 0]
+    ai_df = df[df[label_col] == 1]
+    
+    clean_existing_files(HUMAN_DIR, "aiessays_human")
+    clean_existing_files(AI_DIR, "aiessays_ai")
+    
+    # Process human with cap
+    human_count = 0
+    data_batch = []
+    batch_idx = 0
+    
+    for _, row in tqdm(human_df.iterrows(), total=min(len(human_df), human_cap), desc="AI Essays (Human)"):
+        if human_count >= human_cap:
+            print(f"   → Reached human cap of {human_cap:,} samples, stopping.")
+            break
+        
+        text = str(row[text_col])
+        if len(text.split()) < 100:
+            continue
+        data_batch.append({'text': text, 'source': 'aiessays_human', 'label': 0})
+        human_count += 1
+        if len(data_batch) >= batch_size:
+            save_batch(data_batch, HUMAN_DIR, "aiessays_human", batch_idx)
+            data_batch = []
+            batch_idx += 1
+    if data_batch:
+        save_batch(data_batch, HUMAN_DIR, "aiessays_human", batch_idx)
+    
+    # Process AI with cap
+    ai_count = 0
+    data_batch = []
+    batch_idx = 0
+    
+    for _, row in tqdm(ai_df.iterrows(), total=min(len(ai_df), ai_cap), desc="AI Essays (AI)"):
+        if ai_count >= ai_cap:
+            print(f"   → Reached AI cap of {ai_cap:,} samples, stopping.")
+            break
+        
+        text = str(row[text_col])
+        if len(text.split()) < 100:
+            continue
+        data_batch.append({'text': text, 'source': 'aiessays_ai', 'label': 1})
+        ai_count += 1
+        if len(data_batch) >= batch_size:
+            save_batch(data_batch, AI_DIR, "aiessays_ai", batch_idx)
+            data_batch = []
+            batch_idx += 1
+    if data_batch:
+        save_batch(data_batch, AI_DIR, "aiessays_ai", batch_idx)
+    
+    print(f"✅ AI Essays: {human_count} human (cap {human_cap:,}), {ai_count} AI (cap {ai_cap:,}) saved")
+    return human_count, ai_count
+
 # =============================================================================
 # HUGGINGFACE DATASET DOWNLOADERS
 # =============================================================================
@@ -898,23 +1039,23 @@ def download_wildchat(limit=50000, batch_size=50000):
 def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=None,
                  skip_kaggle=False, auto_kaggle=True):
     """
-    Download all sources with balanced targets.
+    Download all sources with balanced targets and hard caps per source.
     
-    Data Distribution:
-        HUMAN (~target_per_class):
-            - PERSUADE: ~25k (Kaggle)
-            - AI Essays (human): variable (Kaggle)
-            - FineWeb-Edu: ~100k
-            - IvyPanda: ~75k
+    Hard Caps (as % of target_per_class):
+        HUMAN:
+            - PERSUADE: 30% max
+            - AI Essays (human): 30% max
+            - FineWeb-Edu: 35% max
+            - IvyPanda: 25% max
         
-        AI (~target_per_class):
-            - AI Essays (AI): variable (Kaggle)
-            - Cosmopedia/stanford: ~100k
-            - LMSYS: ~50k
-            - WildChat: ~50k
+        AI:
+            - AI Essays (AI): 30% max
+            - Cosmopedia/stanford: 35% max
+            - LMSYS: 25% max
+            - WildChat: 25% max
     """
     print("=" * 70)
-    print("ESSAY-FOCUSED DATA DOWNLOAD (V4)")
+    print("ESSAY-FOCUSED DATA DOWNLOAD (V4 - HARD CAP BALANCER)")
     print(f"Target: ~{target_per_class:,} samples per class")
     print("=" * 70)
     
@@ -922,8 +1063,36 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
     
     stats = {'human': {}, 'ai': {}}
     
+    # Define hard caps as percentages of target
+    CAPS = {
+        'human': {
+            'persuade': 0.30,
+            'aiessays_human': 0.30,
+            'fineweb_edu': 0.35,
+            'ivypanda': 0.25,
+        },
+        'ai': {
+            'aiessays_ai': 0.30,
+            'cosmopedia': 0.35,
+            'lmsys': 0.25,
+            'wildchat': 0.25,
+        }
+    }
+    
+    # Calculate absolute caps
+    human_caps = {k: int(target_per_class * v) for k, v in CAPS['human'].items()}
+    ai_caps = {k: int(target_per_class * v) for k, v in CAPS['ai'].items()}
+    
+    print("\n📊 Hard Caps Per Source:")
+    print("   HUMAN:")
+    for source, cap in human_caps.items():
+        print(f"      {source:20} {cap:>8,}")
+    print("   AI:")
+    for source, cap in ai_caps.items():
+        print(f"      {source:20} {cap:>8,}")
+    
     # =========================================================================
-    # KAGGLE DATASETS
+    # KAGGLE DATASETS (with caps)
     # =========================================================================
     
     if not skip_kaggle:
@@ -947,68 +1116,89 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
                 if a_file:
                     ai_essays_path = str(a_file)
         
+        # Parse PERSUADE with cap
         if persuade_path:
-            stats['human']['persuade'] = parse_persuade_dataset(persuade_path)
+            # Temporarily modify the parser to respect the cap
+            stats['human']['persuade'] = parse_persuade_dataset_capped(persuade_path, human_caps['persuade'])
         
+        # Parse AI Essays with caps for both human and AI
         if ai_essays_path:
-            h, a = parse_ai_essays_dataset(ai_essays_path)
-            stats['human']['ai_essays_human'] = h
-            stats['ai']['ai_essays_ai'] = a
+            h, a = parse_ai_essays_dataset_capped(ai_essays_path, human_caps['aiessays_human'], ai_caps['aiessays_ai'])
+            stats['human']['aiessays_human'] = h
+            stats['ai']['aiessays_ai'] = a
     
     # =========================================================================
-    # HUGGINGFACE DATASETS
+    # HUGGINGFACE DATASETS (fill remaining with caps)
     # =========================================================================
     
     if HF_AVAILABLE:
-        human_from_kaggle = sum(stats['human'].values())
-        ai_from_kaggle = sum(stats['ai'].values())
+        # Calculate how much each source can still contribute
+        human_remaining = {k: max(0, human_caps[k] - stats['human'].get(k, 0)) 
+                          for k in human_caps}
+        ai_remaining = {k: max(0, ai_caps[k] - stats['ai'].get(k, 0)) 
+                       for k in ai_caps}
         
-        human_remaining = max(0, target_per_class - human_from_kaggle)
-        ai_remaining = max(0, target_per_class - ai_from_kaggle)
+        total_human_remaining = sum(human_remaining.values())
+        total_ai_remaining = sum(ai_remaining.values())
         
-        print(f"\nKaggle data: {human_from_kaggle} human, {ai_from_kaggle} AI")
-        print(f"Remaining target: {human_remaining} human, {ai_remaining} AI")
+        print(f"\n📈 Remaining Capacity:")
+        print(f"   HUMAN: {total_human_remaining:,} total")
+        for source, remaining in human_remaining.items():
+            if remaining > 0:
+                print(f"      {source:20} {remaining:>8,}")
+        print(f"   AI: {total_ai_remaining:,} total")
+        for source, remaining in ai_remaining.items():
+            if remaining > 0:
+                print(f"      {source:20} {remaining:>8,}")
         
-        # HUMAN SOURCES
-        if human_remaining > 0:
-            # Split remaining between FineWeb-Edu and IvyPanda (no Wikipedia)
-            fineweb_limit = min(human_remaining // 2, 100000)
-            ivypanda_limit = human_remaining - fineweb_limit
-            
-            stats['human']['fineweb_edu'] = download_fineweb_edu(limit=fineweb_limit)
-            stats['human']['ivypanda'] = download_ivypanda(limit=ivypanda_limit)
+        # HUMAN SOURCES - fill remaining capacity
+        if total_human_remaining > 0:
+            if human_remaining['fineweb_edu'] > 0:
+                stats['human']['fineweb_edu'] = download_fineweb_edu(limit=human_remaining['fineweb_edu'])
+            if human_remaining['ivypanda'] > 0:
+                stats['human']['ivypanda'] = download_ivypanda(limit=human_remaining['ivypanda'])
         
-        # AI SOURCES
-        if ai_remaining > 0:
-            cosmo_limit = min(ai_remaining // 2, 150000)
-            lmsys_limit = min(ai_remaining // 4, 50000)
-            wildchat_limit = ai_remaining - cosmo_limit - lmsys_limit
-            
-            stats['ai']['cosmopedia'] = download_cosmopedia(limit=cosmo_limit)
-            stats['ai']['lmsys'] = download_lmsys(limit=lmsys_limit)
-            stats['ai']['wildchat'] = download_wildchat(limit=wildchat_limit)
+        # AI SOURCES - fill remaining capacity
+        if total_ai_remaining > 0:
+            if ai_remaining['cosmopedia'] > 0:
+                stats['ai']['cosmopedia'] = download_cosmopedia(limit=ai_remaining['cosmopedia'])
+            if ai_remaining['lmsys'] > 0:
+                stats['ai']['lmsys'] = download_lmsys(limit=ai_remaining['lmsys'])
+            if ai_remaining['wildchat'] > 0:
+                stats['ai']['wildchat'] = download_wildchat(limit=ai_remaining['wildchat'])
     
     # =========================================================================
     # SUMMARY
     # =========================================================================
     
     print("\n" + "=" * 70)
-    print("DOWNLOAD COMPLETE - SUMMARY")
+    print("DOWNLOAD COMPLETE - SUMMARY (with Hard Caps)")
     print("=" * 70)
     
     human_total = sum(stats['human'].values())
     ai_total = sum(stats['ai'].values())
     
-    print("\n📊 HUMAN DATA (label=0):")
+    print(f"\n🎯 Target: {target_per_class:,} per class")
+    print(f"📊 HUMAN DATA (label=0) - Total: {human_total:,}:")
+    print(f"   {'Source':20} {'Count':>8} {'%':>6} {'Cap':>10} {'Status':>10}")
+    print(f"   {'-'*60}")
     for source, count in stats['human'].items():
         pct = (count / human_total * 100) if human_total > 0 else 0
-        print(f"   {source:20} {count:>8,} ({pct:5.1f}%)")
+        cap = human_caps.get(source, target_per_class)
+        status = "✅" if count <= cap else "⚠️ OVER"
+        print(f"   {source:20} {count:>8,} {pct:>5.1f}% {cap:>10,} {status:>10}")
+    print(f"   {'-'*60}")
     print(f"   {'TOTAL':20} {human_total:>8,}")
     
-    print("\n🤖 AI DATA (label=1):")
+    print(f"\n🤖 AI DATA (label=1) - Total: {ai_total:,}:")
+    print(f"   {'Source':20} {'Count':>8} {'%':>6} {'Cap':>10} {'Status':>10}")
+    print(f"   {'-'*60}")
     for source, count in stats['ai'].items():
         pct = (count / ai_total * 100) if ai_total > 0 else 0
-        print(f"   {source:20} {count:>8,} ({pct:5.1f}%)")
+        cap = ai_caps.get(source, target_per_class)
+        status = "✅" if count <= cap else "⚠️ OVER"
+        print(f"   {source:20} {count:>8,} {pct:>5.1f}% {cap:>10,} {status:>10}")
+    print(f"   {'-'*60}")
     print(f"   {'TOTAL':20} {ai_total:>8,}")
     
     print(f"\n📁 Output: {DATA_DIR.resolve()}")
@@ -1016,7 +1206,12 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
     if human_total > 0 and ai_total > 0:
         ratio = human_total / ai_total
         status = "✅ balanced" if 0.8 <= ratio <= 1.2 else "⚠️ imbalanced"
-        print(f"Balance: {status} (ratio: {ratio:.2f})")
+        print(f"\n⚖️  Class Balance: {status} (ratio: {ratio:.2f})")
+    
+    # Diversity check
+    human_sources = len([c for c in stats['human'].values() if c > 0])
+    ai_sources = len([c for c in stats['ai'].values() if c > 0])
+    print(f"\n🌈 Diversity: {human_sources} human sources, {ai_sources} AI sources")
     
     return stats
 
