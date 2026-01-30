@@ -51,11 +51,11 @@ class HardNegativeMiner:
                     
                     for idx in fp_indices:
                         hard_negatives.append(texts[idx])
-                
-                # Early Exit Strategy
-                if len(hard_negatives) >= max_negatives:
-                    print(f"Reached limit of {max_negatives} hard negatives. Stopping early.")
-                    break
+                    
+                    # Early Exit Strategy
+                    if len(hard_negatives) >= max_negatives:
+                        print(f"Reached limit of {max_negatives} hard negatives. Stopping early.")
+                        break
                     
         print(f"Found {len(hard_negatives)} Hard Negatives (False Positives).")
         
