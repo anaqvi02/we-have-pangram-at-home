@@ -100,7 +100,7 @@ def train_pipeline(
         val_size = 1000
         val_human = human_ds.select(range(val_size))
         val_ai = ai_ds.select(range(val_size))
-        val_texts = val_human['text'] + val_ai['text']
+        val_texts = list(val_human['text']) + list(val_ai['text'])
         val_labels = [0] * len(val_human['text']) + [1] * len(val_ai['text'])
         
         val_encodings = tokenizer(
@@ -132,7 +132,7 @@ def train_pipeline(
         # 5. Pre-Tokenize NOW (Batch Process)
         print("Pre-tokenizing data...")
         
-        texts = initial_human['text'] + initial_ai['text']
+        texts = list(initial_human['text']) + list(initial_ai['text'])
         labels = [0] * len(initial_human['text']) + [1] * len(initial_ai['text'])
         
         encodings = tokenizer(
