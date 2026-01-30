@@ -91,7 +91,13 @@ class PangramTrainer:
     def evaluate(self, dataset):
         """Run evaluation on a held-out dataset."""
         self.model.eval()
-        dataloader = DataLoader(dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=0)
+        dataloader = DataLoader(
+            dataset, 
+            batch_size=Config.BATCH_SIZE, 
+            shuffle=False, 
+            num_workers=4,
+            pin_memory=True if self.device == 'cuda' else False
+        )
         
         total_loss = 0
         all_preds = []
@@ -100,18 +106,19 @@ class PangramTrainer:
         criterion = torch.nn.CrossEntropyLoss()
         
         with torch.no_grad():
-            for batch in tqdm(dataloader, desc="Evaluating"):
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
-                
-                outputs = self.model(input_ids, attention_mask)
-                loss = criterion(outputs.logits, labels)
-                total_loss += loss.item()
-                
-                preds = torch.argmax(outputs.logits, dim=-1)
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
+            with amp.autocast(device_type='cuda', dtype=self.autocast_dtype, enabled=self.use_amp):
+                for batch in tqdm(dataloader, desc="Evaluating"):
+                    input_ids = batch['input_ids'].to(self.device, non_blocking=True)
+                    attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
+                    labels = batch['labels'].to(self.device, non_blocking=True)
+                    
+                    outputs = self.model(input_ids, attention_mask)
+                    loss = criterion(outputs.logits, labels)
+                    total_loss += loss.item()
+                    
+                    preds = torch.argmax(outputs.logits, dim=-1)
+                    all_preds.extend(preds.cpu().numpy())
+                    all_labels.extend(labels.cpu().numpy())
         
         avg_loss = total_loss / len(dataloader)
         accuracy = (torch.tensor(all_preds) == torch.tensor(all_labels)).float().mean().item()

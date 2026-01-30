@@ -2,6 +2,13 @@ import torch
 import os
 from pathlib import Path
 
+# Suppress tokenizer parallelism warnings when using multiple DataLoader workers
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Enable TensorFloat32 for better performance on NVIDIA GPUs (H100/B200)
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision('high')
+
 class Config:
     # Paths
     PROJECT_ROOT = Path(__file__).parent.parent

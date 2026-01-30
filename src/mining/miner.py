@@ -1,15 +1,13 @@
-import torch
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-from src.config import Config
-from src.data.indexing import VectorIndexer
 import gc
+import torch.amp as amp
 
 class HardNegativeMiner:
     def __init__(self, model, indexer: VectorIndexer):
         self.model = model
         self.indexer = indexer
         self.device = Config.DEVICE
+        self.use_amp = self.device == "cuda"
+        self.autocast_dtype = torch.bfloat16 if (self.use_amp and torch.cuda.is_bf16_supported()) else torch.float16
 
     def mine(self, human_dataset, batch_size=Config.BATCH_SIZE * 8, top_k=1, max_negatives=50000):
         """
@@ -27,25 +25,32 @@ class HardNegativeMiner:
         # Create a simple loader for the human text
         # We assume human_dataset[i] returns {'text': str, 'label': 0}
         
-        loader = DataLoader(human_dataset, batch_size=batch_size, shuffle=False)
+        loader = DataLoader(
+            human_dataset, 
+            batch_size=batch_size, 
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True if self.device == 'cuda' else False
+        )
         
         with torch.no_grad():
-            for batch in tqdm(loader, desc="Mining Inference"):
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                texts = batch['text']
-                
-                outputs = self.model(input_ids, attention_mask)
-                logits = outputs.logits
-                probs = torch.softmax(logits, dim=-1)
-                
-                # AI is label 1. Human is label 0.
-                # If prob(AI) > 0.5 for a Human text, it's a False Positive (Hard Negative).
-                ai_probs = probs[:, 1]
-                fp_indices = torch.where(ai_probs > 0.5)[0]
-                
-                for idx in fp_indices:
-                    hard_negatives.append(texts[idx])
+            with amp.autocast(device_type='cuda', dtype=self.autocast_dtype, enabled=self.use_amp):
+                for batch in tqdm(loader, desc="Mining Inference"):
+                    input_ids = batch['input_ids'].to(self.device, non_blocking=True)
+                    attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
+                    texts = batch['text']
+                    
+                    outputs = self.model(input_ids, attention_mask)
+                    logits = outputs.logits
+                    probs = torch.softmax(logits, dim=-1)
+                    
+                    # AI is label 1. Human is label 0.
+                    # If prob(AI) > 0.5 for a Human text, it's a False Positive (Hard Negative).
+                    ai_probs = probs[:, 1]
+                    fp_indices = torch.where(ai_probs > 0.5)[0]
+                    
+                    for idx in fp_indices:
+                        hard_negatives.append(texts[idx])
                 
                 # Early Exit Strategy
                 if len(hard_negatives) >= max_negatives:
