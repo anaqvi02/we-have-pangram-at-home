@@ -8,17 +8,15 @@ HARD CAP SYSTEM (ensures diversity):
     Each data source has a maximum cap as a percentage of the total target:
     
     HUMAN (label=0):
-        - PERSUADE: 30% max (student essays grades 6-12) [Kaggle]
-        - AI Essays Dataset: 30% max (human subset) [Kaggle]
-        - FineWeb-Edu: 35% max (educational web content) [HuggingFace]
-        - IvyPanda: 25% max (college student essays) [HuggingFace]
+        - AI Essays Dataset: 50% max (human subset, includes PERSUADE essays) [Kaggle]
+        - FineWeb-Edu: 45% max (educational web content) [HuggingFace]
+        - IvyPanda: 35% max (college student essays) [HuggingFace]
     
     AI (label=1):
         - AI Essays Dataset: 30% max (AI-generated subset) [Kaggle]
-        - Cosmopedia/stanford: 15% max (synthetic textbooks/stories) [HuggingFace]
-        - Cosmopedia/web_samples_v2: 30% max (synthetic web content) [HuggingFace]
-        - LMSYS Chat-1M: 20% max (LLM responses, filtered) [HuggingFace]
-        - WildChat: 20% max (ChatGPT responses, filtered) [HuggingFace]
+        - Cosmopedia/stanford: 21% max (synthetic textbooks/stories) [HuggingFace]
+        - Cosmopedia/web_samples_v2: 37% max (synthetic web content) [HuggingFace]
+        - LMSYS Chat-1M: 27% max (LLM responses, filtered) [HuggingFace]
     
     This ensures no single source dominates and maintains dataset diversity.
 
@@ -570,75 +568,6 @@ def download_kaggle_dataset(dataset_id, dest_dir):
 # Uncapped Kaggle parsers were removed to keep the script less confusing.
 
 
-def parse_persuade_dataset_capped(input_path, cap, batch_size=50000):
-    """
-    Parse PERSUADE dataset with a hard cap on samples.
-    """
-    print(f"\n{'='*60}")
-    print(f"PARSING: PERSUADE Dataset (Human Essays, cap={cap:,})")
-    print(f"{'='*60}")
-    
-    input_path = Path(input_path)
-    if not input_path.exists():
-        print(f"❌ File not found: {input_path}")
-        return 0
-    
-    df = pd.read_csv(input_path) if input_path.suffix == '.csv' else pd.read_parquet(input_path)
-    print(f"Loaded {len(df)} rows. Columns: {list(df.columns)}")
-    
-    # Detect text column
-    text_col = None
-    for candidate in ['full_text', 'text', 'essay_text', 'discourse_text']:
-        if candidate in df.columns:
-            text_col = candidate
-            break
-    
-    if text_col is None:
-        print(f"❌ Could not find text column")
-        return 0
-    
-    # Handle discourse aggregation if needed
-    if text_col == 'discourse_text' and 'essay_id_comp' in df.columns:
-        print("Aggregating discourse elements by essay_id...")
-        df = df.groupby('essay_id_comp')[text_col].apply(' '.join).reset_index()
-        df.columns = ['essay_id', 'text']
-        text_col = 'text'
-    
-    clean_existing_files(HUMAN_DIR, "persuade")
-    
-    data_batch = []
-    count = 0
-    batch_idx = 0
-    
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="PERSUADE"):
-        if count >= cap:
-            print(f"   → Reached cap of {cap:,} samples, stopping.")
-            break
-        
-        text = str(row[text_col])
-        
-        # Light filtering - PERSUADE is already essays
-        if len(text.split()) < 100:
-            continue
-        
-        # Deduplication check
-        if is_duplicate(text):
-            continue
-        
-        data_batch.append({'text': text, 'source': 'persuade', 'label': 0})
-        count += 1
-        
-        if len(data_batch) >= batch_size:
-            save_batch(data_batch, HUMAN_DIR, "persuade", batch_idx)
-            data_batch = []
-            batch_idx += 1
-    
-    if data_batch:
-        save_batch(data_batch, HUMAN_DIR, "persuade", batch_idx)
-    
-    print(f"✅ PERSUADE: {count} essays saved (cap was {cap:,})")
-    return count
-
 
 def parse_ai_essays_dataset_capped(input_path, human_cap, ai_cap, batch_size=50000):
     """
@@ -1032,102 +961,26 @@ def download_lmsys(limit=50000, batch_size=50000):
         return 0
 
 
-def download_wildchat(limit=50000, batch_size=50000):
-    """Download WildChat filtered for essay-like AI responses."""
-    print(f"\n{'='*60}")
-    print(f"DOWNLOADING: WildChat (AI, limit={limit})")
-    print(f"{'='*60}")
-    
-    if not HF_AVAILABLE:
-        return 0
-    
-    clean_existing_files(AI_DIR, "wildchat")
-    
-    try:
-        dataset = load_dataset("allenai/WildChat", split="train", streaming=True)
-        
-        data_batch = []
-        count = 0
-        batch_idx = 0
-        skipped_lang = 0
-        
-        pbar = tqdm(total=limit, desc="WildChat")
-        
-        for sample in dataset:
-            if count >= limit:
-                break
-            
-            # Early language filter - skip non-English samples entirely
-            lang = sample.get('language', '')
-            if lang and lang.lower() != 'english':
-                skipped_lang += 1
-                continue
-            
-            conv = sample.get('conversation', [])
-            
-            # Only take first assistant turn (faster, avoids follow-up short responses)
-            for turn in conv:
-                if turn['role'] != 'assistant':
-                    continue
-                
-                text = turn.get('content', '')
-                
-                # Skip non-essay content (travel guides, business descriptions, etc.)
-                if has_non_essay_patterns(text):
-                    break  # Skip to next conversation
-                
-                # Tighter filtering: require more substance and formality
-                if not is_essay_like(text, min_words=250, max_words=3000,
-                                    min_paragraphs=3, require_formality=True, strict=False):
-                    break  # Skip to next conversation
-                
-                if is_duplicate(text):
-                    break
-                
-                data_batch.append({'text': text, 'source': 'wildchat', 'label': 1})
-                count += 1
-                pbar.update(1)
-                break  # Only take first valid assistant response per conversation
-            
-            if len(data_batch) >= batch_size:
-                save_batch(data_batch, AI_DIR, "wildchat", batch_idx)
-                data_batch = []
-                batch_idx += 1
-                gc.collect()
-        
-        if data_batch:
-            save_batch(data_batch, AI_DIR, "wildchat", batch_idx)
-        
-        pbar.close()
-        print(f"✅ WildChat: {count} essay-like responses saved (skipped {skipped_lang:,} non-English)")
-        return count
-        
-    except Exception as e:
-        print(f"❌ WildChat failed: {e}")
-        return 0
-
 # =============================================================================
 # MAIN ORCHESTRATOR
 # =============================================================================
 
-def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=None,
+def download_all(target_per_class=200000, ai_essays_path=None,
                  skip_kaggle=False, auto_kaggle=True):
     """
     Download all sources with balanced targets and hard caps per source.
     
     Hard Caps (as % of target_per_class):
         HUMAN:
-            - PERSUADE: 30% max
-            - AI Essays (human): 30% max
-            - FineWeb-Edu: 35% max
-            - IvyPanda: 25% max
+            - AI Essays (human): 50% max (includes PERSUADE essays)
+            - FineWeb-Edu: 45% max
+            - IvyPanda: 35% max
         
         AI:
             - AI Essays (AI): 30% max
-            - Cosmopedia/stanford: 15% max
-            - Cosmopedia/web_samples_v2: 30% max
-            - LMSYS: 20% max
-            - WildChat: 20% max
+            - Cosmopedia/stanford: 21% max
+            - Cosmopedia/web_samples_v2: 37% max
+            - LMSYS: 27% max
     """
     print("=" * 70)
     print("ESSAY-FOCUSED DATA DOWNLOAD (V4 - HARD CAP BALANCER)")
@@ -1144,17 +997,16 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
     # Define hard caps as percentages of target
     CAPS = {
         'human': {
-            'persuade': 0.30,
-            'aiessays_human': 0.30,
-            'fineweb_edu': 0.35,
-            'ivypanda': 0.25,
+            # PERSUADE removed - already included in AI Essays dataset
+            'aiessays_human': 0.50,  # Increased from 0.30 (absorbs PERSUADE)
+            'fineweb_edu': 0.45,     # Increased from 0.35
+            'ivypanda': 0.35,        # Increased from 0.25
         },
         'ai': {
             'aiessays_ai': 0.30,
-            'cosmopedia_stanford': 0.21,       # +6% from wildchat
-            'cosmopedia_web_samples_v2': 0.37, # +7% from wildchat
-            'lmsys': 0.27,                     # +7% from wildchat
-            # NOTE: WildChat removed - 0.1% acceptance rate made it too slow
+            'cosmopedia_stanford': 0.21,
+            'cosmopedia_web_samples_v2': 0.37,
+            'lmsys': 0.27,
         }
     }
     
@@ -1179,14 +1031,6 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         if auto_kaggle and KAGGLE_AVAILABLE:
             kaggle_raw_dir = DATA_DIR / "raw_kaggle"
             
-            if not persuade_path:
-                p_file = download_kaggle_dataset(
-                    'nbroad/persaude-corpus-2',
-                    kaggle_raw_dir / "persuade"
-                )
-                if p_file:
-                    persuade_path = str(p_file)
-            
             if not ai_essays_path:
                 a_file = download_kaggle_dataset(
                     'shanegerami/ai-vs-human-text',
@@ -1194,10 +1038,6 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
                 )
                 if a_file:
                     ai_essays_path = str(a_file)
-        
-        # Parse PERSUADE with cap
-        if persuade_path:
-            stats['human']['persuade'] = parse_persuade_dataset_capped(persuade_path, human_caps['persuade'])
         
         # Parse AI Essays with caps for both human and AI
         if ai_essays_path:
