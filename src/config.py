@@ -50,8 +50,34 @@ class Config:
             BATCH_SIZE = 8
             GRAD_ACCUMULATION = 4
     else:
-        BATCH_SIZE = 4  
-        GRAD_ACCUMULATION = 8 
+        vram_gb = 0
+        BATCH_SIZE = 4
+        GRAD_ACCUMULATION = 8
+
+    # DataLoader tuning
+    # Linux notebook on H100 typically benefits from a moderate worker count.
+    # Too many workers can increase host RAM and cause CPU contention.
+    if DEVICE == "cuda":
+        _cpu = os.cpu_count() or 4
+        DATALOADER_WORKERS = min(8, max(2, _cpu // 2))
+    else:
+        DATALOADER_WORKERS = 0
+
+    # Embedding throughput knobs (index build + mining queries)
+    # These primarily affect GPU utilization; host RAM impact is usually small.
+    if DEVICE == "cuda" and torch.cuda.is_available():
+        if vram_gb >= 140:
+            INDEX_ENCODE_BATCH_SIZE = 8192
+        elif vram_gb >= 40:
+            INDEX_ENCODE_BATCH_SIZE = 4096
+        else:
+            INDEX_ENCODE_BATCH_SIZE = 1024
+    else:
+        INDEX_ENCODE_BATCH_SIZE = 256
+
+    # Upper bound for query chunking during mining/search.
+    # Keeps peak CPU/GPU memory stable when embedding many queries.
+    INDEX_QUERY_CHUNK_SIZE = 8192
         
     LEARNING_RATE = 1e-5 # Lower LR for fine-tuning Large model
     NUM_EPOCHS = 3

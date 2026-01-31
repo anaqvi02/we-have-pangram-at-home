@@ -6,7 +6,7 @@ import json
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-from src.data.indexing import VectorIndexer
+from src.data.indexing import VectorIndexer, _compute_corpus_fingerprint
 from src.config import Config
 from datasets import load_dataset
 
@@ -22,13 +22,17 @@ def _sorted_parquet_files(parquet_dir: Path) -> list[str]:
 
 
 def _write_index_corpus_manifest(index_out: Path, parquet_files: list[str], total_indexed: int):
+    """Write manifest with corpus fingerprint for validation on load."""
+    fingerprint = _compute_corpus_fingerprint(parquet_files, total_indexed)
     payload = {
         "parquet_files": parquet_files,
         "total_indexed": int(total_indexed),
+        "corpus_fingerprint": fingerprint,
     }
     manifest_path = Path(index_out).with_suffix(".corpus.json")
     with open(manifest_path, "w") as f:
-        json.dump(payload, f)
+        json.dump(payload, f, indent=2)
+    print(f"📝 Manifest written with fingerprint: {fingerprint}")
 
 
 def main():
@@ -38,7 +42,7 @@ def main():
     parser.add_argument(
         "--encode_batch_size",
         type=int,
-        default=2048,
+        default=int(getattr(Config, "INDEX_ENCODE_BATCH_SIZE", 2048)),
         help="Embedding encode batch size (SentenceTransformer). Tune for GPU VRAM.",
     )
     parser.add_argument(

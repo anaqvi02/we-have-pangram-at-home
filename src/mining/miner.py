@@ -30,7 +30,7 @@ class HardNegativeMiner:
         self.model.eval()
         scored_hard_negatives = []  # list[(score: float, text: str)]
         
-        num_workers = 4 if self.device == "cuda" else 0
+        num_workers = int(getattr(Config, "DATALOADER_WORKERS", 4 if self.device == "cuda" else 0))
 
         def collate_fn(features):
             texts = [f.get('text', '') for f in features]
@@ -53,6 +53,7 @@ class HardNegativeMiner:
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            prefetch_factor=2 if num_workers > 0 else None,
             pin_memory=True if self.device == 'cuda' else False,
             persistent_workers=True if num_workers > 0 else False,
             collate_fn=collate_fn,
@@ -89,7 +90,12 @@ class HardNegativeMiner:
         # We might need to batch this if hard_negatives is huge, but usually it's manageable
         
         # Encode hard negatives to get query vectors
-        retrieved_mirrors = self.indexer.search(hard_negatives, top_k=top_k)
+        retrieved_mirrors = self.indexer.search(
+            hard_negatives,
+            top_k=top_k,
+            batch_size=getattr(Config, "INDEX_ENCODE_BATCH_SIZE", None),
+            chunk_size=getattr(Config, "INDEX_QUERY_CHUNK_SIZE", None),
+        )
         
         new_batch = []
         for i, hn_text in enumerate(hard_negatives):

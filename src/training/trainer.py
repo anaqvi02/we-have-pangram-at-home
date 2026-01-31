@@ -48,7 +48,11 @@ class PangramTrainer:
         # Gradient clipping threshold
         self.max_grad_norm = 1.0
         
-    def train_epoch(self, dataset, epoch_idx, total_epochs):
+        # Scheduler (initialized once in run_curriculum, persists across epochs)
+        self.scheduler = None
+        self.global_step = 0
+        
+    def train_epoch(self, dataset, epoch_idx, total_epochs, steps_per_epoch_override=None):
         """
         Train for one epoch.
         
@@ -56,12 +60,13 @@ class PangramTrainer:
             dataset: Training dataset
             epoch_idx: Current epoch number (0-indexed)
             total_epochs: Total number of epochs (for scheduler calculation)
+            steps_per_epoch_override: Optional override for steps calculation (used by run_curriculum)
         """
         print(f"--- Epoch {epoch_idx} Training ---")
         self.model.train()
         
-        # Determine number of workers based on device
-        num_workers = 4 if self.device == 'cuda' else 0
+        # DataLoader worker tuning
+        num_workers = int(getattr(Config, "DATALOADER_WORKERS", 4 if self.device == "cuda" else 0))
         
         def collate_fn(features):
             texts = [f['text'] for f in features]
@@ -83,28 +88,23 @@ class PangramTrainer:
             batch_size=Config.BATCH_SIZE,
             shuffle=True,
             num_workers=num_workers,
+            prefetch_factor=2 if num_workers > 0 else None,
             pin_memory=True if self.device == 'cuda' else False,
             persistent_workers=True if num_workers > 0 else False,
             collate_fn=collate_fn,
         )
         
-        # Recreate scheduler each epoch based on CURRENT dataset size
-        # This is crucial for curriculum learning where dataset grows
+        # Calculate steps for this epoch
         steps_per_epoch = len(dataloader) // Config.GRAD_ACCUMULATION
-        remaining_epochs = total_epochs - epoch_idx
-        num_training_steps = steps_per_epoch * remaining_epochs
-        num_warmup_steps = int(steps_per_epoch * 0.1)  # 10% of first epoch
+        
+        # Handle empty dataloader edge case
+        if steps_per_epoch == 0:
+            print(f"  ⚠️ Warning: Empty dataloader (dataset size: {len(dataset)}). Skipping epoch.")
+            return 0.0
         
         print(f"  → Dataset size: {len(dataset):,} samples")
         print(f"  → Steps this epoch: {steps_per_epoch:,}")
-        print(f"  → Scheduler: {num_training_steps} steps, {num_warmup_steps} warmup")
-        
-        scheduler = get_scheduler(
-            "linear",
-            optimizer=self.optimizer,
-            num_warmup_steps=num_warmup_steps,
-            num_training_steps=num_training_steps
-        )
+        print(f"  → Global step: {self.global_step}")
         
         progress_bar = tqdm(range(steps_per_epoch), desc=f"Epoch {epoch_idx}")
         running_loss = 0.0
@@ -122,7 +122,9 @@ class PangramTrainer:
             else:
                 self.optimizer.step()
 
-            scheduler.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
+            self.global_step += 1
             self.optimizer.zero_grad()
 
         for step, batch in enumerate(dataloader):
@@ -158,9 +160,13 @@ class PangramTrainer:
                     torch.cuda.empty_cache()
 
         # Flush remainder microbatches (otherwise final partial accumulation is dropped)
-        if (step + 1) % Config.GRAD_ACCUMULATION != 0:
-            _optimizer_step()
-            step_count += 1
+        # Guard: 'step' is only defined if loop ran at least once
+        if step_count > 0 or len(dataloader) > 0:
+            # Check if we have leftover gradients from partial accumulation
+            last_step = step if 'step' in dir() else -1
+            if last_step >= 0 and (last_step + 1) % Config.GRAD_ACCUMULATION != 0:
+                _optimizer_step()
+                step_count += 1
         
         progress_bar.close()
         final_loss = running_loss / max(step_count, 1)
@@ -171,7 +177,7 @@ class PangramTrainer:
         """Run evaluation on a held-out dataset."""
         self.model.eval()
 
-        num_workers = 4 if self.device == 'cuda' else 0
+        num_workers = int(getattr(Config, "DATALOADER_WORKERS", 4 if self.device == "cuda" else 0))
 
         def collate_fn(features):
             texts = [f['text'] for f in features]
@@ -193,7 +199,9 @@ class PangramTrainer:
             batch_size=Config.BATCH_SIZE,
             shuffle=False,
             num_workers=num_workers,
+            prefetch_factor=2 if num_workers > 0 else None,
             pin_memory=True if self.device == 'cuda' else False,
+            persistent_workers=True if num_workers > 0 else False,
             collate_fn=collate_fn,
         )
         
@@ -243,6 +251,34 @@ class PangramTrainer:
         if not log_file.exists():
             with open(log_file, "w") as f:
                 f.write("epoch,train_loss,val_loss,val_acc,dataset_size,mined_samples\n")
+        
+        # Initialize scheduler ONCE for the entire training run
+        # Estimate total steps: initial dataset size * epochs (curriculum may add more, but this is an estimate)
+        # The scheduler will continue from where it left off across epochs
+        if self.scheduler is None:
+            initial_steps_per_epoch = len(train_dataset) // Config.BATCH_SIZE // Config.GRAD_ACCUMULATION
+            remaining_epochs = epochs - start_epoch
+            estimated_total_steps = initial_steps_per_epoch * remaining_epochs
+            # Add buffer for curriculum growth (estimate 50% more samples by end)
+            estimated_total_steps = int(estimated_total_steps * 1.5)
+            num_warmup_steps = int(initial_steps_per_epoch * 0.1)  # 10% of first epoch
+            
+            print(f"  → Initializing Scheduler:")
+            print(f"     Estimated total steps: {estimated_total_steps:,}")
+            print(f"     Warmup steps: {num_warmup_steps:,}")
+            
+            self.scheduler = get_scheduler(
+                "linear",
+                optimizer=self.optimizer,
+                num_warmup_steps=num_warmup_steps,
+                num_training_steps=estimated_total_steps
+            )
+            
+            # If resuming from a checkpoint, fast-forward the scheduler
+            if start_epoch > 0 and self.global_step > 0:
+                print(f"  → Fast-forwarding scheduler to step {self.global_step}...")
+                for _ in range(self.global_step):
+                    self.scheduler.step()
         
         for epoch in range(start_epoch, epochs):
             # 1. Train
@@ -323,10 +359,12 @@ class PangramTrainer:
             self.model.save_pretrained(path)
             self.tokenizer.save_pretrained(path)
             
-            # Save optimizer state for true resumption
+            # Save optimizer, scheduler, and global step for true resumption
             torch.save({
                 'optimizer_state': self.optimizer.state_dict(),
                 'scaler_state': self.scaler.state_dict() if self.scaler else None,
+                'scheduler_state': self.scheduler.state_dict() if self.scheduler else None,
+                'global_step': self.global_step,
             }, path / "trainer_state.pt")
             
             # Verify
