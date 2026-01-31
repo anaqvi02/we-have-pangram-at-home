@@ -270,22 +270,38 @@ def run_full_evaluation(
     
     # Load RAID dataset
     print("\n📥 Loading RAID dataset...")
-    raid = load_dataset("liamdugan/raid", split="train")
-    print(f"   Total samples: {len(raid):,}")
+    
+    # Use streaming mode when max_samples is specified to avoid downloading entire dataset
+    if max_samples:
+        print(f"   Using streaming mode (max_samples={max_samples:,})")
+        raid = load_dataset("liamdugan/raid", split="train", streaming=True)
+        print(f"   Streaming enabled - will process up to {max_samples:,} samples")
+    else:
+        raid = load_dataset("liamdugan/raid", split="train")
+        print(f"   Total samples: {len(raid):,}")
+    
+    
+    # Track if we're in streaming mode (affects what operations are possible)
+    is_streaming = max_samples is not None
     
     # Filter to specified domains/models
     if domains:
         raid = raid.filter(lambda x: x.get('domain') in domains)
-        print(f"   After domain filter: {len(raid):,}")
+        if not is_streaming:
+            print(f"   After domain filter: {len(raid):,}")
+        else:
+            print(f"   Filtering to domains: {', '.join(domains)}")
     elif essays_only:
         raid = raid.filter(lambda x: x.get('domain') in ESSAY_DOMAINS)
-        print(f"   After essay-only filter: {len(raid):,}")
+        if not is_streaming:
+            print(f"   After essay-only filter: {len(raid):,}")
         print(f"   (Domains: {', '.join(ESSAY_DOMAINS)})")
     
     if models:
         # Include both AI samples from specified models AND human samples (model=None)
         raid = raid.filter(lambda x: x.get('model') in models or x.get('model') is None)
-        print(f"   After model filter: {len(raid):,}")
+        if not is_streaming:
+            print(f"   After model filter: {len(raid):,}")
     
     results = {
         'model_path': model_path,
@@ -321,79 +337,88 @@ def run_full_evaluation(
     if 'roc_auc' in overall:
         print(f"   ROC-AUC: {overall['roc_auc']:.4f}")
     
-    # By domain
-    print("\n" + "=" * 50)
-    print("EVALUATION BY DOMAIN")
-    print("=" * 50)
+    # Breakdown analyses require multiple passes - only available in non-streaming mode
+    by_domain = {}
+    by_model = {}
+    by_attack = {}
     
-    eval_domains = domains or (ESSAY_DOMAINS if essays_only else RAID_DOMAINS)
-    by_domain = evaluate_by_dimension(
-        detector, raid, 'domain', eval_domains,
-        max_samples_per_value=max_samples // len(eval_domains) if max_samples else 2000,
-        batch_size=batch_size
-    )
-    results['by_domain'] = by_domain
-    
-    print(f"\n📊 Results by Domain:")
-    print(f"   {'Domain':<15} {'Acc':>8} {'F1':>8} {'AUC':>8}")
-    print(f"   {'-'*45}")
-    for domain, metrics in sorted(by_domain.items()):
-        if 'error' in metrics:
-            print(f"   {domain:<15} {'N/A':>8}")
-        else:
-            auc = metrics.get('roc_auc', 0)
-            print(f"   {domain:<15} {metrics['accuracy']:>8.4f} {metrics['f1']:>8.4f} {auc:>8.4f}")
-    
-    # By model (AI generator)
-    print("\n" + "=" * 50)
-    print("EVALUATION BY AI MODEL")
-    print("=" * 50)
-    
-    eval_models = models or RAID_MODELS
-    # Filter to AI samples only for by-model evaluation
-    ai_only = raid.filter(lambda x: x.get('model') is not None)
-    by_model = evaluate_by_dimension(
-        detector, ai_only, 'model', eval_models,
-        max_samples_per_value=max_samples // len(eval_models) if max_samples else 2000,
-        batch_size=batch_size
-    )
-    results['by_model'] = by_model
-    
-    print(f"\n📊 Detection Rate by AI Model:")
-    print(f"   {'Model':<15} {'Detected':>10} {'Samples':>10}")
-    print(f"   {'-'*40}")
-    for model, metrics in sorted(by_model.items(), key=lambda x: x[1].get('recall', 0), reverse=True):
-        if 'error' in metrics:
-            print(f"   {model:<15} {'N/A':>10}")
-        else:
-            # For AI-only, recall = detection rate
-            print(f"   {model:<15} {metrics['recall']*100:>9.1f}% {metrics['num_samples']:>10,}")
-    
-    # By attack (for adversarial robustness)
-    print("\n" + "=" * 50)
-    print("EVALUATION BY ADVERSARIAL ATTACK")
-    print("=" * 50)
-    
-    # Filter to samples with attacks
-    attacked = raid.filter(lambda x: x.get('attack') is not None)
-    if len(attacked) > 0:
-        by_attack = evaluate_by_dimension(
-            detector, attacked, 'attack', RAID_ATTACKS,
-            max_samples_per_value=max_samples // len(RAID_ATTACKS) if max_samples else 1000,
+    if is_streaming:
+        print("\n⚠️  Streaming mode: Skipping breakdown analyses (by domain/model/attack)")
+        print("   Run without --max_samples for full breakdown analysis.")
+    else:
+        # By domain
+        print("\n" + "=" * 50)
+        print("EVALUATION BY DOMAIN")
+        print("=" * 50)
+        
+        eval_domains = domains or (ESSAY_DOMAINS if essays_only else RAID_DOMAINS)
+        by_domain = evaluate_by_dimension(
+            detector, raid, 'domain', eval_domains,
+            max_samples_per_value=max_samples // len(eval_domains) if max_samples else 2000,
             batch_size=batch_size
         )
-        results['by_attack'] = by_attack
+        results['by_domain'] = by_domain
         
-        print(f"\n📊 Robustness to Adversarial Attacks:")
-        print(f"   {'Attack':<25} {'Detected':>10} {'Accuracy':>10}")
-        print(f"   {'-'*50}")
-        for attack, metrics in sorted(by_attack.items(), key=lambda x: x[1].get('recall', 0), reverse=True):
+        print(f"\n📊 Results by Domain:")
+        print(f"   {'Domain':<15} {'Acc':>8} {'F1':>8} {'AUC':>8}")
+        print(f"   {'-'*45}")
+        for domain, metrics in sorted(by_domain.items()):
             if 'error' in metrics:
-                print(f"   {attack:<25} {'N/A':>10}")
+                print(f"   {domain:<15} {'N/A':>8}")
             else:
-                print(f"   {attack:<25} {metrics['recall']*100:>9.1f}% {metrics['accuracy']*100:>9.1f}%")
-    else:
-        print("   No adversarial samples found in filtered dataset")
+                auc = metrics.get('roc_auc', 0)
+                print(f"   {domain:<15} {metrics['accuracy']:>8.4f} {metrics['f1']:>8.4f} {auc:>8.4f}")
+        
+        # By model (AI generator)
+        print("\n" + "=" * 50)
+        print("EVALUATION BY AI MODEL")
+        print("=" * 50)
+        
+        eval_models = models or RAID_MODELS
+        # Filter to AI samples only for by-model evaluation
+        ai_only = raid.filter(lambda x: x.get('model') is not None)
+        by_model = evaluate_by_dimension(
+            detector, ai_only, 'model', eval_models,
+            max_samples_per_value=max_samples // len(eval_models) if max_samples else 2000,
+            batch_size=batch_size
+        )
+        results['by_model'] = by_model
+        
+        print(f"\n📊 Detection Rate by AI Model:")
+        print(f"   {'Model':<15} {'Detected':>10} {'Samples':>10}")
+        print(f"   {'-'*40}")
+        for model, metrics in sorted(by_model.items(), key=lambda x: x[1].get('recall', 0), reverse=True):
+            if 'error' in metrics:
+                print(f"   {model:<15} {'N/A':>10}")
+            else:
+                # For AI-only, recall = detection rate
+                print(f"   {model:<15} {metrics['recall']*100:>9.1f}% {metrics['num_samples']:>10,}")
+        
+        # By attack (for adversarial robustness)
+        print("\n" + "=" * 50)
+        print("EVALUATION BY ADVERSARIAL ATTACK")
+        print("=" * 50)
+        
+        # Filter to samples with attacks
+        attacked = raid.filter(lambda x: x.get('attack') is not None)
+        if len(attacked) > 0:
+            by_attack = evaluate_by_dimension(
+                detector, attacked, 'attack', RAID_ATTACKS,
+                max_samples_per_value=max_samples // len(RAID_ATTACKS) if max_samples else 1000,
+                batch_size=batch_size
+            )
+            results['by_attack'] = by_attack
+            
+            print(f"\n📊 Robustness to Adversarial Attacks:")
+            print(f"   {'Attack':<25} {'Detected':>10} {'Accuracy':>10}")
+            print(f"   {'-'*50}")
+            for attack, metrics in sorted(by_attack.items(), key=lambda x: x[1].get('recall', 0), reverse=True):
+                if 'error' in metrics:
+                    print(f"   {attack:<25} {'N/A':>10}")
+                else:
+                    print(f"   {attack:<25} {metrics['recall']*100:>9.1f}% {metrics['accuracy']*100:>9.1f}%")
+        else:
+            print("   No adversarial samples found in filtered dataset")
     
     # Save results
     if output_dir:
@@ -420,11 +445,16 @@ def run_full_evaluation(
    ROC-AUC:  {overall.get('roc_auc', 'N/A')}
 
 📈 Key Insights:
-   - Tested on {overall['num_samples']:,} samples from RAID benchmark
-   - {len([d for d in by_domain.values() if d.get('accuracy', 0) > 0.9])} domains with >90% accuracy
-   - Best detected model: {max(by_model.items(), key=lambda x: x[1].get('recall', 0))[0] if by_model else 'N/A'}
-   - Hardest to detect: {min(by_model.items(), key=lambda x: x[1].get('recall', 1))[0] if by_model else 'N/A'}
-""")
+   - Tested on {overall['num_samples']:,} samples from RAID benchmark""")
+    
+    if by_domain:
+        print(f"   - {len([d for d in by_domain.values() if d.get('accuracy', 0) > 0.9])} domains with >90% accuracy")
+    if by_model:
+        best_model = max(by_model.items(), key=lambda x: x[1].get('recall', 0))[0]
+        hardest_model = min(by_model.items(), key=lambda x: x[1].get('recall', 1))[0]
+        print(f"   - Best detected model: {best_model}")
+        print(f"   - Hardest to detect: {hardest_model}")
+    print()
     
     return results
 
