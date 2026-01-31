@@ -97,7 +97,8 @@ STRUCTURAL_ANTI_PATTERNS = [
 ]
 
 # Template/report patterns - these indicate structured documents, not essays
-TEMPLATE_ANTI_PATTERNS = [
+# Plain string patterns (case-insensitive matching)
+TEMPLATE_STRING_PATTERNS = [
     # Legal brief patterns
     'table of contents',
     'facts\n',           # Section header
@@ -105,9 +106,6 @@ TEMPLATE_ANTI_PATTERNS = [
     'holding\n',         # Section header
     'reasoning\n',       # Section header
     'references\n',      # Section header at end
-    
-    # Case citation patterns (e.g., "533 U.S. 27")
-    r'\d{1,3}\s+u\.?\s*s\.?\s+\d+',
     
     # Report/brief indicators
     'executive summary',
@@ -123,11 +121,24 @@ TEMPLATE_ANTI_PATTERNS = [
     '[date]',
     'lorem ipsum',
     
-    # Q&A format
+    # Q&A format (various styles)
     'question:',
     'answer:',
     'q:',
     'a:',
+    'question 1:',
+    'question 2:',
+    'answer 1:',
+    'answer 2:',
+]
+
+# Regex patterns for more complex matching
+TEMPLATE_REGEX_PATTERNS = [
+    # Case citation patterns (e.g., "533 U.S. 27")
+    r'\d{1,3}\s+u\.?\s*s\.?\s+\d+',
+    # Numbered Q&A patterns (Question 1:, Answer 2:, etc.)
+    r'question\s*\d+\s*:',
+    r'answer\s*\d+\s*:',
 ]
 
 # Non-essay patterns: Filter out travel guides, business descriptions, etc.
@@ -163,6 +174,29 @@ NON_ESSAY_PATTERNS = [
     # Product review markers
     r'product\s+review',
     r'pros\s+and\s+cons',
+    
+    # AI self-reference patterns (robotic responses)
+    r'as an ai\s+(?:language\s+)?model',
+    r'i am an ai',
+    r'i don\'t have access to',
+    r'i cannot provide',
+    r'i apologize,? (?:but )?(?:as|i)',
+    
+    # Formatting dividers (technical docs, not essays)
+    r'={5,}',                  # ====== dividers
+    r'-{10,}',                 # ------ dividers
+    r'\*{5,}',                 # ****** dividers
+    
+    # Math/computation content (not prose)
+    r'\\left\\[\(\[]',         # LaTeX matrices
+    r'\\begin\{',              # LaTeX environments
+    r'\\end\{',
+    r'eigenvalue',
+    r'eigenvector',
+    r'matrix multiplication',
+    r'row reduce',
+    r'nullspace',
+    r'determinant',
 ]
 
 def has_non_essay_patterns(text):
@@ -239,14 +273,17 @@ def has_structural_antipatterns(text):
 def has_template_patterns(text):
     """Detect template-based documents like legal briefs, case reports, etc."""
     text_lower = text.lower()
-    for pattern in TEMPLATE_ANTI_PATTERNS:
-        # Check if it's a regex pattern or simple string
-        if pattern.startswith(r'\d'):
-            # It's a regex for case citations
-            if re.search(pattern, text_lower, re.IGNORECASE):
-                return True
-        elif pattern in text_lower:
+    
+    # Check plain string patterns
+    for pattern in TEMPLATE_STRING_PATTERNS:
+        if pattern in text_lower:
             return True
+    
+    # Check regex patterns
+    for pattern in TEMPLATE_REGEX_PATTERNS:
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            return True
+    
     return False
 
 
@@ -278,7 +315,7 @@ def is_essay_like(text, min_words=200, max_words=5000, min_paragraphs=2,
             return False
         if metrics['formality_score'] < 2:
             return False
-    if require_formality and metrics['formality_score'] < 1:
+    if require_formality and metrics['formality_score'] < 2:
         return False
     return True
 
@@ -589,35 +626,16 @@ def sample_all(samples_per_source=2):
             config="default",
             text_key=None,
             text_extractor=lmsys_extractor,
-            filter_kwargs={'min_words': 300, 'max_words': 3000, 'min_paragraphs': 3, 'strict': True},
+            filter_kwargs={'min_words': 250, 'max_words': 3000, 'min_paragraphs': 3, 'require_formality': True, 'strict': False},
             samples_wanted=samples_per_source,
-            max_batches=20,  # Higher limit for strict filtering
+            max_batches=30,  # Higher limit for tighter filtering
             label=1
         ))
         
-        def wildchat_extractor(row):
-            for turn in row.get('conversation', []):
-                if turn.get('role') == 'assistant':
-                    text = turn.get('content', '')
-                    # Skip non-essay content (travel guides, business descriptions, etc.)
-                    if has_non_essay_patterns(text):
-                        return None
-                    return text
-            return None
-        
-        all_samples.extend(sample_from_hf(
-            name="WildChat",
-            dataset_id="allenai/WildChat",
-            config="default",
-            text_key=None,
-            text_extractor=wildchat_extractor,
-            filter_kwargs={'min_words': 300, 'max_words': 3000, 'min_paragraphs': 3, 'strict': True},
-            samples_wanted=samples_per_source,
-            max_batches=20,
-            label=1
-        ))
+        # NOTE: WildChat removed - 0.1% acceptance rate made it too slow for the quality gained
+        # Its allocation has been redistributed to LMSYS and Cosmopedia in download_data.py
     else:
-        print("\n⚠️  No HF_TOKEN set - skipping authenticated datasets (LMSYS, WildChat)")
+        print("\n⚠️  No HF_TOKEN set - skipping authenticated datasets (LMSYS)")
         print("   Set HF_TOKEN environment variable or run: huggingface-cli login")
     
     # =========================================================================

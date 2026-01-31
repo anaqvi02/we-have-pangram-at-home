@@ -15,9 +15,10 @@ HARD CAP SYSTEM (ensures diversity):
     
     AI (label=1):
         - AI Essays Dataset: 30% max (AI-generated subset) [Kaggle]
-        - Cosmopedia/stanford/web_samples_v2: 35% max (synthetic textbooks/stories) [HuggingFace]
-        - LMSYS Chat-1M: 25% max (LLM responses, filtered) [HuggingFace]
-        - WildChat: 25% max (ChatGPT responses, filtered) [HuggingFace]
+        - Cosmopedia/stanford: 15% max (synthetic textbooks/stories) [HuggingFace]
+        - Cosmopedia/web_samples_v2: 30% max (synthetic web content) [HuggingFace]
+        - LMSYS Chat-1M: 20% max (LLM responses, filtered) [HuggingFace]
+        - WildChat: 20% max (ChatGPT responses, filtered) [HuggingFace]
     
     This ensures no single source dominates and maintains dataset diversity.
 
@@ -51,6 +52,10 @@ from src.config import Config
 # AUTHENTICATION
 # =============================================================================
 
+# Track auth status for gated datasets
+HF_AUTHENTICATED = False
+KAGGLE_AUTHENTICATED = False
+
 # HuggingFace Auth for gated datasets (like LMSYS)
 try:
     from huggingface_hub import login
@@ -58,8 +63,12 @@ try:
     if hf_token:
         print("🔑 Authenticating with Hugging Face...")
         login(token=hf_token)
+        HF_AUTHENTICATED = True
+    else:
+        print("⚠️  WARNING: HF_TOKEN not set. Gated datasets (LMSYS) will fail to download.")
+        print("   Set HF_TOKEN environment variable to access gated datasets.")
 except ImportError:
-    pass
+    print("⚠️  WARNING: huggingface_hub not installed. Cannot authenticate for gated datasets.")
 
 # HuggingFace datasets library
 try:
@@ -67,15 +76,22 @@ try:
     HF_AVAILABLE = True
 except ImportError:
     HF_AVAILABLE = False
-    print("Warning: 'datasets' library not available. Only Kaggle parsing will work.")
+    print("❌ ERROR: 'datasets' library not available. Only Kaggle parsing will work.")
 
 # Kaggle API
 try:
     import kaggle
     KAGGLE_AVAILABLE = True
+    # Test authentication
+    try:
+        kaggle.api.authenticate()
+        KAGGLE_AUTHENTICATED = True
+    except Exception as e:
+        print(f"⚠️  WARNING: Kaggle authentication failed: {e}")
+        print("   Ensure ~/.kaggle/kaggle.json exists with valid credentials.")
 except ImportError:
     KAGGLE_AVAILABLE = False
-    print("Warning: 'kaggle' library not installed. Kaggle downloads will not work.")
+    print("⚠️  WARNING: 'kaggle' library not installed. Kaggle downloads will not work.")
 
 # =============================================================================
 # CONFIGURATION
@@ -125,7 +141,8 @@ STRUCTURAL_ANTI_PATTERNS = [
 ]
 
 # Template/report patterns - these indicate structured documents, not essays
-TEMPLATE_ANTI_PATTERNS = [
+# Plain string patterns (case-insensitive matching)
+TEMPLATE_STRING_PATTERNS = [
     # Legal brief patterns
     'table of contents',
     'facts\n',           # Section header
@@ -133,9 +150,6 @@ TEMPLATE_ANTI_PATTERNS = [
     'holding\n',         # Section header
     'reasoning\n',       # Section header
     'references\n',      # Section header at end
-    
-    # Case citation patterns (e.g., "533 U.S. 27")
-    r'\d{1,3}\s+u\.?\s*s\.?\s+\d+',
     
     # Report/brief indicators
     'executive summary',
@@ -151,11 +165,24 @@ TEMPLATE_ANTI_PATTERNS = [
     '[date]',
     'lorem ipsum',
     
-    # Q&A format
+    # Q&A format (various styles)
     'question:',
     'answer:',
     'q:',
     'a:',
+    'question 1:',
+    'question 2:',
+    'answer 1:',
+    'answer 2:',
+]
+
+# Regex patterns for more complex matching
+TEMPLATE_REGEX_PATTERNS = [
+    # Case citation patterns (e.g., "533 U.S. 27")
+    r'\d{1,3}\s+u\.?\s*s\.?\s+\d+',
+    # Numbered Q&A patterns (Question 1:, Answer 2:, etc.)
+    r'question\s*\d+\s*:',
+    r'answer\s*\d+\s*:',
 ]
 
 # Non-essay patterns: Filter out travel guides, business descriptions, etc.
@@ -191,6 +218,29 @@ NON_ESSAY_PATTERNS = [
     # Product review markers
     r'product\s+review',
     r'pros\s+and\s+cons',
+    
+    # AI self-reference patterns (robotic responses)
+    r'as an ai\s+(?:language\s+)?model',
+    r'i am an ai',
+    r'i don\'t have access to',
+    r'i cannot provide',
+    r'i apologize,? (?:but )?(?:as|i)',
+    
+    # Formatting dividers (technical docs, not essays)
+    r'={5,}',                  # ====== dividers
+    r'-{10,}',                 # ------ dividers
+    r'\*{5,}',                 # ****** dividers
+    
+    # Math/computation content (not prose)
+    r'\\left\\[\(\[]',         # LaTeX matrices
+    r'\\begin\{',              # LaTeX environments
+    r'\\end\{',
+    r'eigenvalue',
+    r'eigenvector',
+    r'matrix multiplication',
+    r'row reduce',
+    r'nullspace',
+    r'determinant',
 ]
 
 def has_non_essay_patterns(text):
@@ -297,14 +347,17 @@ def has_structural_antipatterns(text):
 def has_template_patterns(text):
     """Detect template-based documents like legal briefs, case reports, etc."""
     text_lower = text.lower()
-    for pattern in TEMPLATE_ANTI_PATTERNS:
-        # Check if it's a regex pattern or simple string
-        if pattern.startswith(r'\d'):
-            # It's a regex for case citations
-            if re.search(pattern, text_lower, re.IGNORECASE):
-                return True
-        elif pattern in text_lower:
+    
+    # Check plain string patterns
+    for pattern in TEMPLATE_STRING_PATTERNS:
+        if pattern in text_lower:
             return True
+    
+    # Check regex patterns
+    for pattern in TEMPLATE_REGEX_PATTERNS:
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            return True
+    
     return False
 
 
@@ -380,8 +433,8 @@ def is_essay_like(text, min_words=200, max_words=5000, min_paragraphs=2,
         if metrics['formality_score'] < 2:
             return False
     
-    # Optional formality requirement
-    if require_formality and metrics['formality_score'] < 1:
+    # Optional formality requirement (require 2+ formal indicators)
+    if require_formality and metrics['formality_score'] < 2:
         return False
     
     return True
@@ -430,6 +483,58 @@ def clean_existing_files(output_dir, prefix):
         f.unlink()
 
 
+# =============================================================================
+# DEDUPLICATION
+# =============================================================================
+
+# Global deduplication set (persists across all source downloads within a run)
+_SEEN_HASHES = set()
+_DEDUP_STATS = {'total_checked': 0, 'duplicates_found': 0}
+
+
+def _text_fingerprint(text: str) -> str:
+    """Create a fingerprint for text deduplication.
+    
+    Uses first 100 chars + length for speed while maintaining good uniqueness.
+    """
+    import hashlib
+    # Normalize whitespace for more robust matching
+    normalized = ' '.join(text.split())
+    # Use prefix + length as fingerprint (faster than full hash)
+    prefix = normalized[:200] if len(normalized) >= 200 else normalized
+    content = f"{prefix}|len={len(normalized)}"
+    return hashlib.md5(content.encode()).hexdigest()
+
+
+def is_duplicate(text: str) -> bool:
+    """Check if text has been seen before and mark it as seen.
+    
+    Returns True if duplicate, False if new.
+    """
+    global _SEEN_HASHES, _DEDUP_STATS
+    _DEDUP_STATS['total_checked'] += 1
+    
+    fp = _text_fingerprint(text)
+    if fp in _SEEN_HASHES:
+        _DEDUP_STATS['duplicates_found'] += 1
+        return True
+    
+    _SEEN_HASHES.add(fp)
+    return False
+
+
+def reset_dedup():
+    """Reset deduplication state (call at start of download run)."""
+    global _SEEN_HASHES, _DEDUP_STATS
+    _SEEN_HASHES = set()
+    _DEDUP_STATS = {'total_checked': 0, 'duplicates_found': 0}
+
+
+def get_dedup_stats() -> dict:
+    """Get deduplication statistics."""
+    return _DEDUP_STATS.copy()
+
+
 def download_kaggle_dataset(dataset_id, dest_dir):
     """Download and unzip a Kaggle dataset."""
     if not KAGGLE_AVAILABLE:
@@ -461,135 +566,8 @@ def download_kaggle_dataset(dataset_id, dest_dir):
 # KAGGLE DATASET PARSERS
 # =============================================================================
 
-def parse_persuade_dataset(input_path, batch_size=50000):
-    """
-    Parse the PERSUADE dataset - Human student essays (grades 6-12).
-    Dataset: https://www.kaggle.com/datasets/nbroad/persaude-corpus-2
-    """
-    print(f"\n{'='*60}")
-    print("PARSING: PERSUADE Dataset (Human Essays)")
-    print(f"{'='*60}")
-    
-    input_path = Path(input_path)
-    if not input_path.exists():
-        print(f"❌ File not found: {input_path}")
-        return 0
-    
-    df = pd.read_csv(input_path) if input_path.suffix == '.csv' else pd.read_parquet(input_path)
-    print(f"Loaded {len(df)} rows. Columns: {list(df.columns)}")
-    
-    # Detect text column
-    text_col = None
-    for candidate in ['full_text', 'text', 'essay_text', 'discourse_text']:
-        if candidate in df.columns:
-            text_col = candidate
-            break
-    
-    if text_col is None:
-        print(f"❌ Could not find text column")
-        return 0
-    
-    # Handle discourse aggregation if needed
-    if text_col == 'discourse_text' and 'essay_id_comp' in df.columns:
-        print("Aggregating discourse elements by essay_id...")
-        df = df.groupby('essay_id_comp')[text_col].apply(' '.join).reset_index()
-        df.columns = ['essay_id', 'text']
-        text_col = 'text'
-    
-    clean_existing_files(HUMAN_DIR, "persuade")
-    
-    data_batch = []
-    count = 0
-    batch_idx = 0
-    
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="PERSUADE"):
-        text = str(row[text_col])
-        
-        # Light filtering - PERSUADE is already essays
-        if len(text.split()) < 100:
-            continue
-        
-        data_batch.append({'text': text, 'source': 'persuade', 'label': 0})
-        count += 1
-        
-        if len(data_batch) >= batch_size:
-            save_batch(data_batch, HUMAN_DIR, "persuade", batch_idx)
-            data_batch = []
-            batch_idx += 1
-    
-    if data_batch:
-        save_batch(data_batch, HUMAN_DIR, "persuade", batch_idx)
-    
-    print(f"✅ PERSUADE: {count} essays saved")
-    return count
-
-
-def parse_ai_essays_dataset(input_path, batch_size=50000):
-    """
-    Parse AI Generated Essays dataset - contains BOTH human and AI essays.
-    Dataset: https://www.kaggle.com/datasets/shanegerami/ai-vs-human-text
-    """
-    print(f"\n{'='*60}")
-    print("PARSING: AI Essays Dataset (Human + AI)")
-    print(f"{'='*60}")
-    
-    input_path = Path(input_path)
-    if not input_path.exists():
-        print(f"❌ File not found: {input_path}")
-        return 0, 0
-    
-    df = pd.read_csv(input_path) if input_path.suffix == '.csv' else pd.read_parquet(input_path)
-    print(f"Loaded {len(df)} rows. Columns: {list(df.columns)}")
-    
-    text_col = 'text' if 'text' in df.columns else 'essay'
-    label_col = 'label' if 'label' in df.columns else 'generated'
-    
-    print(f"Label distribution:\n{df[label_col].value_counts()}")
-    
-    human_df = df[df[label_col] == 0]
-    ai_df = df[df[label_col] == 1]
-    
-    clean_existing_files(HUMAN_DIR, "aiessays_human")
-    clean_existing_files(AI_DIR, "aiessays_ai")
-    
-    # Process human
-    human_count = 0
-    data_batch = []
-    batch_idx = 0
-    
-    for _, row in tqdm(human_df.iterrows(), total=len(human_df), desc="AI Essays (Human)"):
-        text = str(row[text_col])
-        if len(text.split()) < 100:
-            continue
-        data_batch.append({'text': text, 'source': 'aiessays_human', 'label': 0})
-        human_count += 1
-        if len(data_batch) >= batch_size:
-            save_batch(data_batch, HUMAN_DIR, "aiessays_human", batch_idx)
-            data_batch = []
-            batch_idx += 1
-    if data_batch:
-        save_batch(data_batch, HUMAN_DIR, "aiessays_human", batch_idx)
-    
-    # Process AI
-    ai_count = 0
-    data_batch = []
-    batch_idx = 0
-    
-    for _, row in tqdm(ai_df.iterrows(), total=len(ai_df), desc="AI Essays (AI)"):
-        text = str(row[text_col])
-        if len(text.split()) < 100:
-            continue
-        data_batch.append({'text': text, 'source': 'aiessays_ai', 'label': 1})
-        ai_count += 1
-        if len(data_batch) >= batch_size:
-            save_batch(data_batch, AI_DIR, "aiessays_ai", batch_idx)
-            data_batch = []
-            batch_idx += 1
-    if data_batch:
-        save_batch(data_batch, AI_DIR, "aiessays_ai", batch_idx)
-    
-    print(f"✅ AI Essays: {human_count} human, {ai_count} AI saved")
-    return human_count, ai_count
+# NOTE: This script's main pipeline uses capped parsers to enforce the hard-cap system.
+# Uncapped Kaggle parsers were removed to keep the script less confusing.
 
 
 def parse_persuade_dataset_capped(input_path, cap, batch_size=50000):
@@ -641,6 +619,10 @@ def parse_persuade_dataset_capped(input_path, cap, batch_size=50000):
         
         # Light filtering - PERSUADE is already essays
         if len(text.split()) < 100:
+            continue
+        
+        # Deduplication check
+        if is_duplicate(text):
             continue
         
         data_batch.append({'text': text, 'source': 'persuade', 'label': 0})
@@ -698,6 +680,8 @@ def parse_ai_essays_dataset_capped(input_path, human_cap, ai_cap, batch_size=500
         text = str(row[text_col])
         if len(text.split()) < 100:
             continue
+        if is_duplicate(text):
+            continue
         data_batch.append({'text': text, 'source': 'aiessays_human', 'label': 0})
         human_count += 1
         if len(data_batch) >= batch_size:
@@ -719,6 +703,8 @@ def parse_ai_essays_dataset_capped(input_path, human_cap, ai_cap, batch_size=500
         
         text = str(row[text_col])
         if len(text.split()) < 100:
+            continue
+        if is_duplicate(text):
             continue
         data_batch.append({'text': text, 'source': 'aiessays_ai', 'label': 1})
         ai_count += 1
@@ -763,6 +749,9 @@ def download_fineweb_edu(limit=100000, batch_size=50000):
             text = sample.get('text', '')
             
             if not is_essay_like(text, min_words=300, max_words=4000, min_paragraphs=3):
+                continue
+            
+            if is_duplicate(text):
                 continue
             
             data_batch.append({'text': text, 'source': 'fineweb_edu', 'label': 0})
@@ -830,6 +819,9 @@ def download_ivypanda(limit=50000, batch_size=None):
             if len(text.split()) < 100:
                 continue
             
+            if is_duplicate(text):
+                continue
+            
             data_batch.append({'text': text, 'source': 'ivypanda', 'label': 0})
             count += 1
             
@@ -849,7 +841,7 @@ def download_ivypanda(limit=50000, batch_size=None):
         return 0
 
 
-def download_cosmopedia(stanford_limit=50000, web_samples_v2_limit=100000, batch_size=50000):
+def download_cosmopedia(*, stanford_limit, web_samples_v2_limit, batch_size=50000):
     """Download Cosmopedia - synthetic textbooks/stories and web content (AI-generated).
     
     Downloads from two subsets:
@@ -863,11 +855,12 @@ def download_cosmopedia(stanford_limit=50000, web_samples_v2_limit=100000, batch
     print(f"{'='*60}")
     
     if not HF_AVAILABLE:
-        return 0
+        return 0, 0
     
     clean_existing_files(AI_DIR, "cosmopedia")
-    
-    total_count = 0
+
+    stanford_count = 0
+    web_samples_v2_count = 0
     batch_idx = 0
     
     # Download stanford subset
@@ -891,6 +884,9 @@ def download_cosmopedia(stanford_limit=50000, web_samples_v2_limit=100000, batch
             if not is_essay_like(text, min_words=300, max_words=4000, min_paragraphs=3):
                 continue
             
+            if is_duplicate(text):
+                continue
+            
             data_batch.append({'text': text, 'source': f'cosmopedia_{subset}', 'label': 1})
             count += 1
             pbar.update(1)
@@ -907,7 +903,7 @@ def download_cosmopedia(stanford_limit=50000, web_samples_v2_limit=100000, batch
             batch_idx += 1
         
         pbar.close()
-        total_count += count
+        stanford_count = count
         print(f"  ✓ {subset}: {count} samples")
         
     except Exception as e:
@@ -935,6 +931,9 @@ def download_cosmopedia(stanford_limit=50000, web_samples_v2_limit=100000, batch
             if not is_essay_like(text, min_words=250, max_words=4000, min_paragraphs=2):
                 continue
             
+            if is_duplicate(text):
+                continue
+            
             data_batch.append({'text': text, 'source': f'cosmopedia_{subset}', 'label': 1})
             count += 1
             pbar.update(1)
@@ -951,14 +950,15 @@ def download_cosmopedia(stanford_limit=50000, web_samples_v2_limit=100000, batch
             batch_idx += 1
         
         pbar.close()
-        total_count += count
+        web_samples_v2_count = count
         print(f"  ✓ {subset}: {count} samples")
         
     except Exception as e:
         print(f"  ✗ {subset} failed: {e}")
     
+    total_count = stanford_count + web_samples_v2_count
     print(f"✅ Cosmopedia total: {total_count} samples saved")
-    return total_count
+    return stanford_count, web_samples_v2_count
 
 
 def download_lmsys(limit=50000, batch_size=50000):
@@ -990,6 +990,7 @@ def download_lmsys(limit=50000, batch_size=50000):
             
             conv = sample.get('conversation', [])
             
+            # Only take first assistant turn (faster, avoids follow-up short responses)
             for turn in conv:
                 if turn['role'] != 'assistant':
                     continue
@@ -998,19 +999,20 @@ def download_lmsys(limit=50000, batch_size=50000):
                 
                 # Skip non-essay content (travel guides, business descriptions, etc.)
                 if has_non_essay_patterns(text):
-                    continue
+                    break  # Skip to next conversation
                 
-                # Strict filtering for chat data
-                if not is_essay_like(text, min_words=300, max_words=3000,
-                                    min_paragraphs=3, strict=True):
-                    continue
+                # Tighter filtering: require more substance and formality
+                if not is_essay_like(text, min_words=250, max_words=3000,
+                                    min_paragraphs=3, require_formality=True, strict=False):
+                    break  # Skip to next conversation
+                
+                if is_duplicate(text):
+                    break
                 
                 data_batch.append({'text': text, 'source': 'lmsys', 'label': 1})
                 count += 1
                 pbar.update(1)
-                
-                if count >= limit:
-                    break
+                break  # Only take first valid assistant response per conversation
             
             if len(data_batch) >= batch_size:
                 save_batch(data_batch, AI_DIR, "lmsys", batch_idx)
@@ -1047,6 +1049,7 @@ def download_wildchat(limit=50000, batch_size=50000):
         data_batch = []
         count = 0
         batch_idx = 0
+        skipped_lang = 0
         
         pbar = tqdm(total=limit, desc="WildChat")
         
@@ -1054,8 +1057,15 @@ def download_wildchat(limit=50000, batch_size=50000):
             if count >= limit:
                 break
             
+            # Early language filter - skip non-English samples entirely
+            lang = sample.get('language', '')
+            if lang and lang.lower() != 'english':
+                skipped_lang += 1
+                continue
+            
             conv = sample.get('conversation', [])
             
+            # Only take first assistant turn (faster, avoids follow-up short responses)
             for turn in conv:
                 if turn['role'] != 'assistant':
                     continue
@@ -1064,19 +1074,20 @@ def download_wildchat(limit=50000, batch_size=50000):
                 
                 # Skip non-essay content (travel guides, business descriptions, etc.)
                 if has_non_essay_patterns(text):
-                    continue
+                    break  # Skip to next conversation
                 
-                # Strict filtering for chat data
-                if not is_essay_like(text, min_words=300, max_words=3000,
-                                    min_paragraphs=3, strict=True):
-                    continue
+                # Tighter filtering: require more substance and formality
+                if not is_essay_like(text, min_words=250, max_words=3000,
+                                    min_paragraphs=3, require_formality=True, strict=False):
+                    break  # Skip to next conversation
+                
+                if is_duplicate(text):
+                    break
                 
                 data_batch.append({'text': text, 'source': 'wildchat', 'label': 1})
                 count += 1
                 pbar.update(1)
-                
-                if count >= limit:
-                    break
+                break  # Only take first valid assistant response per conversation
             
             if len(data_batch) >= batch_size:
                 save_batch(data_batch, AI_DIR, "wildchat", batch_idx)
@@ -1088,7 +1099,7 @@ def download_wildchat(limit=50000, batch_size=50000):
             save_batch(data_batch, AI_DIR, "wildchat", batch_idx)
         
         pbar.close()
-        print(f"✅ WildChat: {count} essay-like responses saved")
+        print(f"✅ WildChat: {count} essay-like responses saved (skipped {skipped_lang:,} non-English)")
         return count
         
     except Exception as e:
@@ -1113,14 +1124,18 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         
         AI:
             - AI Essays (AI): 30% max
-            - Cosmopedia/stanford: 35% max
-            - LMSYS: 25% max
-            - WildChat: 25% max
+            - Cosmopedia/stanford: 15% max
+            - Cosmopedia/web_samples_v2: 30% max
+            - LMSYS: 20% max
+            - WildChat: 20% max
     """
     print("=" * 70)
     print("ESSAY-FOCUSED DATA DOWNLOAD (V4 - HARD CAP BALANCER)")
     print(f"Target: ~{target_per_class:,} samples per class")
     print("=" * 70)
+    
+    # Reset deduplication tracking for this run
+    reset_dedup()
     
     ensure_dirs()
     
@@ -1136,10 +1151,10 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         },
         'ai': {
             'aiessays_ai': 0.30,
-            'cosmopedia': 0.25,
-            'cosmopedia_web_samples_v2': 0.20,
-            'lmsys': 0.20,
-            'wildchat': 0.20,
+            'cosmopedia_stanford': 0.21,       # +6% from wildchat
+            'cosmopedia_web_samples_v2': 0.37, # +7% from wildchat
+            'lmsys': 0.27,                     # +7% from wildchat
+            # NOTE: WildChat removed - 0.1% acceptance rate made it too slow
         }
     }
     
@@ -1182,7 +1197,6 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         
         # Parse PERSUADE with cap
         if persuade_path:
-            # Temporarily modify the parser to respect the cap
             stats['human']['persuade'] = parse_persuade_dataset_capped(persuade_path, human_caps['persuade'])
         
         # Parse AI Essays with caps for both human and AI
@@ -1224,22 +1238,18 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
         
         # AI SOURCES - fill remaining capacity
         if total_ai_remaining > 0:
-            # Cosmopedia handles both stanford and web_samples_v2 subsets
-            cosmopedia_total = ai_remaining.get('cosmopedia', 0) + ai_remaining.get('cosmopedia_web_samples_v2', 0)
-            if cosmopedia_total > 0:
-                # Split allocation: 2/3 for stanford, 1/3 for web_samples_v2
-                stanford_limit = int(cosmopedia_total * 0.67)
-                web_samples_v2_limit = cosmopedia_total - stanford_limit
-                cosmopedia_count = download_cosmopedia(
+            stanford_limit = ai_remaining.get('cosmopedia_stanford', 0)
+            web_samples_v2_limit = ai_remaining.get('cosmopedia_web_samples_v2', 0)
+            if stanford_limit > 0 or web_samples_v2_limit > 0:
+                stanford_count, web_samples_v2_count = download_cosmopedia(
                     stanford_limit=stanford_limit,
                     web_samples_v2_limit=web_samples_v2_limit
                 )
-                # Track both subsets under the cosmopedia key for stats
-                stats['ai']['cosmopedia'] = cosmopedia_count
+                stats['ai']['cosmopedia_stanford'] = stanford_count
+                stats['ai']['cosmopedia_web_samples_v2'] = web_samples_v2_count
             if ai_remaining['lmsys'] > 0:
                 stats['ai']['lmsys'] = download_lmsys(limit=ai_remaining['lmsys'])
-            if ai_remaining['wildchat'] > 0:
-                stats['ai']['wildchat'] = download_wildchat(limit=ai_remaining['wildchat'])
+            # WildChat removed - 0.1% acceptance rate made it too slow for the quality gained
     
     # =========================================================================
     # SUMMARY
@@ -1248,14 +1258,6 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
     print("\n" + "=" * 70)
     print("DOWNLOAD COMPLETE - SUMMARY (with Hard Caps)")
     print("=" * 70)
-    
-    # Cosmopedia is tracked as a combined count (stanford + web_samples_v2).
-    # For cap comparisons, also combine the two caps so the summary reflects intent.
-    if 'cosmopedia' in stats['ai'] and 'cosmopedia_web_samples_v2' not in stats['ai']:
-        combined_cap = int(ai_caps.get('cosmopedia', 0)) + int(ai_caps.get('cosmopedia_web_samples_v2', 0))
-        if combined_cap > 0:
-            ai_caps = dict(ai_caps)
-            ai_caps['cosmopedia'] = combined_cap
 
     human_total = sum(stats['human'].values())
     ai_total = sum(stats['ai'].values())
@@ -1294,6 +1296,12 @@ def download_all(target_per_class=200000, persuade_path=None, ai_essays_path=Non
     human_sources = len([c for c in stats['human'].values() if c > 0])
     ai_sources = len([c for c in stats['ai'].values() if c > 0])
     print(f"\n🌈 Diversity: {human_sources} human sources, {ai_sources} AI sources")
+    
+    # Deduplication stats
+    dedup_stats = get_dedup_stats()
+    if dedup_stats['total_checked'] > 0:
+        dup_pct = (dedup_stats['duplicates_found'] / dedup_stats['total_checked']) * 100
+        print(f"\n🔍 Deduplication: {dedup_stats['duplicates_found']:,} duplicates found ({dup_pct:.1f}% of {dedup_stats['total_checked']:,} checked)")
     
     return stats
 
