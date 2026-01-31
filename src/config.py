@@ -43,7 +43,10 @@ class Config:
         if vram_gb >= 140:  # B200 / H200 (192GB / 141GB)
             BATCH_SIZE = 64
             GRAD_ACCUMULATION = 1
-        elif vram_gb >= 40:  # A100 / H100
+        elif vram_gb >= 70:  # H100 80GB / A100 80GB
+            BATCH_SIZE = 48
+            GRAD_ACCUMULATION = 1
+        elif vram_gb >= 40:  # A100 40GB
             BATCH_SIZE = 32
             GRAD_ACCUMULATION = 1
         else:

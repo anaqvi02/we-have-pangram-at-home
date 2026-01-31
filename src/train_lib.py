@@ -77,9 +77,9 @@ def train_pipeline(
     
     # Apply torch.compile for CUDA (significant speedup on modern GPUs)
     if Config.DEVICE == "cuda" and hasattr(torch, 'compile'):
-        print("⚡ Compiling model with torch.compile (max-autotune)...")
+        print("⚡ Compiling model with torch.compile (reduce-overhead)...")
         try:
-            detector.model = torch.compile(detector.model, mode="max-autotune")
+            detector.model = torch.compile(detector.model, mode="reduce-overhead")
             print("✅ Model compiled successfully")
         except Exception as e:
             print(f"⚠️ torch.compile failed, continuing without: {e}")
