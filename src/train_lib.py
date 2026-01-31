@@ -195,7 +195,7 @@ def train_pipeline(
     # 3. Trainer
     trainer = PangramTrainer(detector.model, tokenizer, indexer, checkpoint_root=checkpoint_root)
 
-    # If resuming, restore optimizer/scaler state for true continuity.
+    # If resuming, restore optimizer/scaler/scheduler state for true continuity.
     if resume_path is not None:
         state = _load_trainer_state(resume_path)
         if state:
@@ -203,7 +203,12 @@ def train_pipeline(
                 trainer.optimizer.load_state_dict(state.get("optimizer_state", {}))
                 if trainer.scaler is not None and state.get("scaler_state") is not None:
                     trainer.scaler.load_state_dict(state["scaler_state"])
-                print("✅ Restored optimizer/scaler state")
+                # Restore global step for scheduler initialization
+                if "global_step" in state:
+                    trainer.global_step = state["global_step"]
+                    print(f"✅ Restored optimizer/scaler state (global_step: {trainer.global_step})")
+                else:
+                    print("✅ Restored optimizer/scaler state")
             except Exception as e:
                 print(f"⚠️ Failed to restore optimizer/scaler state: {e}")
 
