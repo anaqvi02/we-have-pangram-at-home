@@ -149,7 +149,8 @@ def evaluate_subset(
     dataset,
     max_samples: Optional[int] = None,
     batch_size: int = 32,
-    desc: str = "Evaluating"
+    desc: str = "Evaluating",
+    require_both_classes: bool = False,
 ) -> Dict:
     """Evaluate on a subset of the dataset."""
     
@@ -184,10 +185,25 @@ def evaluate_subset(
     print(f"Running inference on {len(texts):,} samples...")
     predictions, probabilities = predict_batch(detector, texts, batch_size)
     labels = np.array(labels)
+
+    # Class balance: a single-class eval set makes every metric meaningless.
+    # Same trap as the 2026-01-31 essay run (human sources failed to load,
+    # script printed a fake 0% FPR). The per-model/per-attack breakdowns stay
+    # single-class on purpose (detection rate = recall); only the overall
+    # evaluation requires both classes.
+    human_count = sum(1 for l in labels if l == 0)
+    ai_count = sum(1 for l in labels if l == 1)
+    if require_both_classes and (human_count == 0 or ai_count == 0):
+        print(f"\n❌ ERROR: Evaluation set is single-class ({human_count:,} human, {ai_count:,} AI).")
+        print("   Metrics from a single-class set are meaningless. Adjust the")
+        print("   domain/model filters and re-run. No results file was written.")
+        raise SystemExit(1)
     
     # Calculate metrics
     metrics = {
         'num_samples': len(texts),
+        'human_samples': human_count,
+        'ai_samples': ai_count,
         'accuracy': accuracy_score(labels, predictions),
         'precision': precision_score(labels, predictions, zero_division=0),
         'recall': recall_score(labels, predictions, zero_division=0),
@@ -324,12 +340,14 @@ def run_full_evaluation(
         detector, raid, 
         max_samples=max_samples,
         batch_size=batch_size,
-        desc="Overall"
+        desc="Overall",
+        require_both_classes=True,
     )
     results['overall'] = overall
     
     print(f"\n📊 Overall Results:")
     print(f"   Samples: {overall['num_samples']:,}")
+    print(f"   Human / AI samples: {overall.get('human_samples', 0):,} / {overall.get('ai_samples', 0):,}")
     print(f"   Accuracy: {overall['accuracy']:.4f}")
     print(f"   Precision: {overall['precision']:.4f}")
     print(f"   Recall: {overall['recall']:.4f}")

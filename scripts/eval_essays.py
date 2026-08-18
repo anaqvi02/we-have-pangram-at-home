@@ -296,39 +296,52 @@ def run_benchmark(
     print("\n📖 Loading HUMAN essay sources...")
     for source in BENCHMARK_SOURCES['human']:
         texts = load_benchmark_source(source, samples_per_source)
-        if texts:
-            all_texts.extend(texts)
-            all_labels.extend([0] * len(texts))  # 0 = human
-            results['sources'][source['name']] = {
-                'count': len(texts),
-                'label': 'human',
-                'description': source['description'],
-            }
+        all_texts.extend(texts)
+        all_labels.extend([0] * len(texts))  # 0 = human
+        results['sources'][source['name']] = {
+            'count': len(texts),
+            'label': 'human',
+            'description': source['description'],
+        }
+        if not texts:
+            print(f"      ⚠️ {source['name']} returned 0 samples (load failed or filter empty)")
     
     # Load AI sources
     print("\n🤖 Loading AI-GENERATED sources...")
     for source in BENCHMARK_SOURCES['ai']:
         texts = load_benchmark_source(source, samples_per_source)
-        if texts:
-            all_texts.extend(texts)
-            all_labels.extend([1] * len(texts))  # 1 = AI
-            results['sources'][source['name']] = {
-                'count': len(texts),
-                'label': 'ai',
-                'description': source['description'],
-            }
+        all_texts.extend(texts)
+        all_labels.extend([1] * len(texts))  # 1 = AI
+        results['sources'][source['name']] = {
+            'count': len(texts),
+            'label': 'ai',
+            'description': source['description'],
+        }
+        if not texts:
+            print(f"      ⚠️ {source['name']} returned 0 samples (load failed or filter empty)")
     
     # Summary
     human_count = sum(1 for l in all_labels if l == 0)
     ai_count = sum(1 for l in all_labels if l == 1)
     print(f"\n📊 Dataset Summary:")
+    for name, info in results['sources'].items():
+        print(f"   {name}: {info['count']:,} samples ({info['label']})")
     print(f"   Human samples: {human_count:,}")
     print(f"   AI samples: {ai_count:,}")
     print(f"   Total: {len(all_texts):,}")
     
     if len(all_texts) == 0:
         print("\n❌ No samples loaded! Check dataset availability.")
-        return None
+        raise SystemExit(1)
+
+    # Guard: a single-class eval set makes every metric meaningless.
+    # The 2026-01-31 run hit this: the human sources failed to load, and the
+    # script still printed "FPR 0.0%" on an AI-only set.
+    if human_count == 0 or ai_count == 0:
+        print(f"\n❌ ERROR: Evaluation set is single-class ({human_count:,} human, {ai_count:,} AI).")
+        print("   Metrics from a single-class set are meaningless. Fix the failing")
+        print("   sources above and re-run. No results file was written.")
+        raise SystemExit(1)
     
     # Run evaluation
     print("\n" + "=" * 50)
