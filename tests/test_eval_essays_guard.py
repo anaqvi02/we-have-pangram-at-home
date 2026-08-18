@@ -107,6 +107,14 @@ def test_human_sources_fail_exits():
               expect_exit=True)
 
 
+def test_all_sources_have_data_files():
+    # HF removed dataset loading scripts (datasets 3.x); every benchmark
+    # source must load from the datasets-server auto-converted parquet.
+    for group in mod.BENCHMARK_SOURCES.values():
+        for source in group:
+            assert source.get("data_files"), f"{source['name']} missing data_files"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

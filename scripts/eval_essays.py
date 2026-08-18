@@ -62,6 +62,9 @@ BENCHMARK_SOURCES = {
             'text_field': 'human_answers',  # List of human answers
             'description': 'Human answers from HC3 corpus (comparison with ChatGPT)',
             'is_list_field': True,  # Text field contains a list
+            # HF removed dataset loading scripts (datasets 3.x); the
+            # datasets-server auto-converted parquet is the supported path.
+            'data_files': ['https://huggingface.co/datasets/Hello-SimpleAI/HC3/resolve/refs%2Fconvert%2Fparquet/all/train/0000.parquet'],
         },
         {
             'name': 'Reddit-Writing',
@@ -71,6 +74,10 @@ BENCHMARK_SOURCES = {
             'text_field': 'content', 
             'description': 'Reddit writing prompts and responses',
             'filter_fn': lambda x: len(x.get('content', '').split()) > 150,  # Only longer posts
+            'data_files': [
+                f'https://huggingface.co/datasets/webis/tldr-17/resolve/refs%2Fconvert%2Fparquet/default/partial-train/{i:04d}.parquet'
+                for i in range(10)
+            ],
         },
     ],
     # AI-generated sources
@@ -83,6 +90,7 @@ BENCHMARK_SOURCES = {
             'text_field': 'chatgpt_answers',  # List of ChatGPT answers
             'description': 'ChatGPT answers from HC3 corpus',
             'is_list_field': True,
+            'data_files': ['https://huggingface.co/datasets/Hello-SimpleAI/HC3/resolve/refs%2Fconvert%2Fparquet/all/train/0000.parquet'],
         },
         {
             'name': 'GPT-Wiki-Intro',
@@ -91,6 +99,7 @@ BENCHMARK_SOURCES = {
             'split': 'train',
             'text_field': 'generated_intro',
             'description': 'GPT-3 generated Wikipedia introductions',
+            'data_files': ['https://huggingface.co/datasets/aadityaubhat/GPT-wiki-intro/resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet'],
         },
     ],
 }
@@ -161,7 +170,16 @@ def load_benchmark_source(source_config: dict, max_samples: int) -> List[str]:
     
     try:
         # Load dataset with streaming to avoid huge downloads
-        if source_config.get('hf_subset'):
+        if source_config.get('data_files'):
+            # Parquet path: HF removed dataset loading scripts in datasets
+            # 3.x, so load the datasets-server auto-converted parquet files.
+            ds = load_dataset(
+                "parquet",
+                data_files=source_config['data_files'],
+                split=source_config['split'],
+                streaming=True
+            )
+        elif source_config.get('hf_subset'):
             ds = load_dataset(
                 source_config['hf_path'],
                 source_config['hf_subset'],
