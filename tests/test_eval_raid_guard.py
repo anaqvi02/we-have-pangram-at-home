@@ -91,7 +91,9 @@ def _sample(is_human):
         "generation": "x" * 200,
         "model": None if is_human else "chatgpt",
         "domain": "news",
-        "attack": None,
+        # RAID semantics: humans carry attack=None, clean AI carries
+        # attack="none", attacked AI carries the attack name.
+        "attack": None if is_human else "none",
         "decoding": "sample",
     }
 
@@ -152,6 +154,25 @@ def test_breakdown_single_class_stays_legal():
         _FakeDetector(), ai_only, max_samples=100, require_both_classes=False)
     assert metrics["ai_samples"] == 20, f"expected 20 AI, got {metrics['ai_samples']}"
     assert metrics["human_samples"] == 0
+
+
+def test_no_attacks_filters_attacked_samples():
+    # clean-only run must keep humans + clean AI, drop attacked AI
+    _install_stubs()
+    samples = [_sample(True) for _ in range(10)]  # humans, attack=None
+    samples += [_sample(False) for _ in range(10)]  # clean AI, attack="none"
+    for _ in range(10):  # attacked AI
+        s = _sample(False)
+        s["attack"] = "homoglyph"
+        samples.append(s)
+    mod.load_dataset = lambda *a, **k: FakeRaid(samples)
+    results = mod.run_full_evaluation(
+        model_path="dummy", max_samples=100, output_dir="/tmp", no_attacks=True)
+    overall = results["overall"]
+    assert overall["ai_samples"] == 10, f"expected 10 clean AI, got {overall['ai_samples']}"
+    assert overall["human_samples"] == 10, f"expected 10 human, got {overall['human_samples']}"
+    assert results["config"]["no_attacks"] is True
+    _cleanup()
 
 
 if __name__ == "__main__":

@@ -273,11 +273,14 @@ def run_full_evaluation(
     batch_size: int = 32,
     output_dir: Optional[str] = None,
     essays_only: bool = True,
+    no_attacks: bool = False,
 ):
     """Run comprehensive RAID benchmark evaluation."""
     
     print("=" * 70)
-    print("RAID BENCHMARK EVALUATION" + (" (Essays Only)" if essays_only else ""))
+    print("RAID BENCHMARK EVALUATION"
+          + (" (Essays Only)" if essays_only else "")
+          + (" (No Attacks)" if no_attacks else ""))
     print("=" * 70)
     
     # Load model
@@ -318,6 +321,15 @@ def run_full_evaluation(
         raid = raid.filter(lambda x: x.get('model') in models or x.get('model') is None)
         if not is_streaming:
             print(f"   After model filter: {len(raid):,}")
+
+    if no_attacks:
+        # Clean AI samples carry attack="none"; humans carry attack=None.
+        # Drop the attacked AI samples, keep clean AI + humans.
+        raid = raid.filter(lambda x: x.get('attack') in (None, 'none'))
+        if not is_streaming:
+            print(f"   After no-attacks filter: {len(raid):,}")
+        else:
+            print("   No-attacks filter: clean generations only")
     
     results = {
         'model_path': model_path,
@@ -328,6 +340,7 @@ def run_full_evaluation(
             'models': models or RAID_MODELS,
             'batch_size': batch_size,
             'essays_only': essays_only,
+            'no_attacks': no_attacks,
         }
     }
     
@@ -418,7 +431,7 @@ def run_full_evaluation(
         print("=" * 50)
         
         # Filter to samples with attacks
-        attacked = raid.filter(lambda x: x.get('attack') is not None)
+        attacked = raid.filter(lambda x: x.get('attack') not in (None, 'none'))
         if len(attacked) > 0:
             by_attack = evaluate_by_dimension(
                 detector, attacked, 'attack', RAID_ATTACKS,
@@ -532,6 +545,11 @@ Examples:
         "--all-domains", action="store_true",
         help="Evaluate on all domains (not just essays). Default is essay-only."
     )
+    parser.add_argument(
+        "--no-attacks", action="store_true",
+        help="Evaluate only clean generations (no adversarial attacks). "
+             "Run once with and once without, then compare the overall block."
+    )
     
     args = parser.parse_args()
     
@@ -543,6 +561,7 @@ Examples:
         batch_size=args.batch_size,
         output_dir=args.output_dir,
         essays_only=not args.all_domains,
+        no_attacks=args.no_attacks,
     )
 
 
