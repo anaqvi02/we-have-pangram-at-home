@@ -69,8 +69,8 @@
 
     { "type": "arrow", "id": "a9", "x": 1430, "y": 730, "width": 0, "height": 40, "points": [[0,0],[0,40]], "endArrowhead": "arrow", "startBinding": { "elementId": "r_evalb", "fixedPoint": [0.5, 1] }, "endBinding": { "elementId": "r_results", "fixedPoint": [0.5, 0] } },
 
-    { "type": "rectangle", "id": "r_results", "x": 1220, "y": 770, "width": 420, "height": 110, "roundness": { "type": 3 }, "backgroundColor": "#fff3bf", "fillStyle": "solid", "boundElements": [{ "id": "t_results", "type": "text" }] },
-    { "type": "text", "id": "t_results", "x": 1230, "y": 790, "width": 400, "height": 80, "text": "Recorded run (essay benchmark, 2026-01-31)\nRecall on AI: 66.1% - FPR: 0.0%\nCaveat: eval set had no human samples.\nThe metrics are not meaningful.", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_results", "originalText": "Recorded run (essay benchmark, 2026-01-31)\nRecall on AI: 66.1% - FPR: 0.0%\nCaveat: eval set had no human samples.\nThe metrics are not meaningful.", "autoResize": true }
+    { "type": "rectangle", "id": "r_results", "x": 1220, "y": 770, "width": 420, "height": 135, "roundness": { "type": 3 }, "backgroundColor": "#fff3bf", "fillStyle": "solid", "boundElements": [{ "id": "t_results", "type": "text" }] },
+    { "type": "text", "id": "t_results", "x": 1230, "y": 785, "width": 400, "height": 100, "text": "Recorded run: essay benchmark\n2026-08-18 - 2,000 human / 2,000 AI\nAccuracy 85.4% - Recall 83.0%\nROC-AUC 0.934 - FPR 12.1%", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_results", "originalText": "Recorded run: essay benchmark\n2026-08-18 - 2,000 human / 2,000 AI\nAccuracy 85.4% - Recall 83.0%\nROC-AUC 0.934 - FPR 12.1%", "autoResize": true }
   ],
   "appState": {
     "viewBackgroundColor": "#ffffff"
