@@ -11,24 +11,31 @@ dataset.
 
 ## Results
 
-The table shows the recorded essay benchmark run from 2026-01-31.
+The table shows the essay benchmark run from 2026-08-18, the first run with
+a valid evaluation set. The set holds 2,000 human and 2,000 AI samples, all
+from sources the model never saw during training.
 
 | Metric | Value |
 |---|---|
-| Samples | 1,000 |
-| Accuracy | 66.1% |
-| Precision | 100.0% |
-| Recall (AI text detected) | 66.1% |
-| F1 score | 0.7959 |
-| False positive rate | 0.0% |
+| Samples | 4,000 |
+| Accuracy | 85.4% |
+| Precision | 87.3% |
+| Recall (AI text detected) | 83.0% |
+| F1 score | 0.8506 |
+| ROC-AUC | 0.934 |
+| False positive rate (default threshold) | 12.1% |
 
-Read these numbers with care. The evaluation set contained no human samples.
-The human data sources failed to load, and the script kept running. The model
-only judged AI text, so precision and false positive rate are not meaningful.
-ROC-AUC was not available for the same reason.
+The model detects 83% of AI text at the default threshold. It flags 12% of
+human text as AI. The ROC-AUC of 0.934 shows that the model ranks text well:
+you can move the threshold to trade recall against false positives. A lower
+false positive rate is possible, at the cost of catching less AI text.
 
-Plainly: the model detected 66% of AI text. Its behavior on human text is
-unknown. This is a working pipeline, not a production detector.
+Context: the first recorded run (2026-01-31) looked better — 100% precision
+and 0% false positive rate. Those numbers were meaningless. The evaluation
+set contained no human samples because the human sources failed to load, and
+the script kept running. The class-balance guard in `scripts/eval_essays.py`
+exists to prevent that. Pangram reports near-zero false positive rates at
+high accuracy; closing the gap needs more data and more epochs.
 
 ## How it works
 
@@ -127,8 +134,8 @@ evaluate.py  evaluation entry point
 
 ## Limitations
 
-- The model underperforms on AI text, and its behavior on human text is
-  untested.
+- At the default threshold, the model misses 17% of AI text and flags 12% of
+  human text as AI.
 - Training text comes from encyclopedic and academic sources. Informal text
   (chat, social media) will score differently.
 - Adversarial robustness is not measured. The RAID harness exists; recorded
