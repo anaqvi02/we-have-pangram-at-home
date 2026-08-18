@@ -118,30 +118,48 @@ def predict_batch(
     tokenizer = detector.tokenizer
     model = detector.model
     
-    for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i:i + batch_size]
-        
-        # Tokenize
-        inputs = tokenizer(
-            batch_texts,
-            truncation=True,
-            max_length=Config.MAX_LENGTH,
-            padding=True,
-            return_tensors='pt'
-        )
-        
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = model(**inputs)
-            logits = outputs.logits
-            probs = torch.softmax(logits, dim=-1)
-            preds = torch.argmax(logits, dim=-1)
-        
-        all_preds.extend(preds.cpu().numpy())
-        all_probs.extend(probs[:, 1].cpu().numpy())  # Probability of AI class
+    i = 0
+    while i < len(texts):
+        chunk = texts[i:i + batch_size]
+        try:
+            preds, probs = _predict_chunk(model, tokenizer, chunk, device)
+        except torch.cuda.OutOfMemoryError:
+            # CUDA OOM: halve the batch and retry this chunk. Keeps a run
+            # alive when the batch is too large for the GPU (DeBERTa-large
+            # attention is memory-hungry; a 22 GB card tops out well under
+            # batch 128 at 512 tokens).
+            if batch_size <= 1:
+                raise
+            torch.cuda.empty_cache()
+            batch_size = max(1, batch_size // 2)
+            continue
+        all_preds.extend(preds)
+        all_probs.extend(probs)
+        i += len(chunk)
     
     return np.array(all_preds), np.array(all_probs)
+
+
+def _predict_chunk(model, tokenizer, batch_texts, device):
+    """Run one forward pass on a chunk of texts. Split out so the OOM retry
+    in predict_batch can re-run the same chunk with a smaller batch."""
+    inputs = tokenizer(
+        batch_texts,
+        truncation=True,
+        max_length=Config.MAX_LENGTH,
+        padding=True,
+        return_tensors='pt'
+    )
+    
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits
+        probs = torch.softmax(logits, dim=-1)
+        preds = torch.argmax(logits, dim=-1)
+    
+    return preds.cpu().numpy(), probs[:, 1].cpu().numpy()
 
 
 def evaluate_subset(

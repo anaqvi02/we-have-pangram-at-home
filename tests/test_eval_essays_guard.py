@@ -32,7 +32,14 @@ def _stub(name, attrs=None):
 
 _torch = _stub("torch", {
     "no_grad": lambda: SimpleNamespace(__enter__=lambda s: None, __exit__=lambda s, *a: False)})
-_cuda = _stub("torch.cuda", {"is_available": lambda: False})
+class _OOM(Exception):
+    """Stand-in for torch.cuda.OutOfMemoryError in the stubbed torch."""
+
+_cuda = _stub("torch.cuda", {
+    "is_available": lambda: False,
+    "empty_cache": lambda: None,
+    "OutOfMemoryError": _OOM,
+})
 _backends = _stub("torch.backends")
 _mps = _stub("torch.backends.mps", {"is_available": lambda: False, "is_built": lambda: False})
 _torch.cuda, _torch.backends = _cuda, _backends
@@ -113,6 +120,26 @@ def test_all_sources_have_data_files():
     for group in mod.BENCHMARK_SOURCES.values():
         for source in group:
             assert source.get("data_files"), f"{source['name']} missing data_files"
+
+
+def test_predict_batch_halves_batch_on_oom():
+    # first chunk OOMs -> batch halves, same texts retried, all processed
+    calls = []
+
+    def fake_chunk(model, tokenizer, chunk, device):
+        calls.append(len(chunk))
+        if len(calls) == 1:
+            raise _OOM()
+        return [1] * len(chunk), [0.9] * len(chunk)
+
+    det = _FakeDetector()
+    det.config = SimpleNamespace(DEVICE="cpu")
+    mod._predict_chunk = fake_chunk
+    preds, probs = mod.predict_batch(det, ["x"] * 100, batch_size=32)
+    assert calls[0] == 32, f"first chunk {calls[0]} != 32"
+    assert max(calls[1:]) <= 16, f"post-OOM chunks not halved: {calls}"
+    assert sum(calls[1:]) == 100, f"processed {sum(calls[1:])} != 100: {calls}"
+    assert len(preds) == len(probs) == 100
 
 
 if __name__ == "__main__":

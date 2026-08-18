@@ -33,7 +33,14 @@ def _stub(name, attrs=None):
 
 _torch = _stub("torch", {
     "no_grad": lambda: SimpleNamespace(__enter__=lambda s: None, __exit__=lambda s, *a: False)})
-_cuda = _stub("torch.cuda", {"is_available": lambda: False})
+class _OOM(Exception):
+    """Stand-in for torch.cuda.OutOfMemoryError in the stubbed torch."""
+
+_cuda = _stub("torch.cuda", {
+    "is_available": lambda: False,
+    "empty_cache": lambda: None,
+    "OutOfMemoryError": _OOM,
+})
 _backends = _stub("torch.backends")
 _mps = _stub("torch.backends.mps", {"is_available": lambda: False, "is_built": lambda: False})
 _torch.cuda, _torch.backends = _cuda, _backends
@@ -75,6 +82,8 @@ sys.modules["src.model.detector"] = _det
 _spec = importlib.util.spec_from_file_location("eval_raid_mod", EVAL_PATH)
 mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
+# capture the real predict_batch: _install_stubs() replaces it with a lambda
+_REAL_PREDICT_BATCH = mod.predict_batch
 
 # dataset stub (streaming mode: filter() + iteration only)
 class FakeRaid:
@@ -173,6 +182,25 @@ def test_no_attacks_filters_attacked_samples():
     assert overall["human_samples"] == 10, f"expected 10 human, got {overall['human_samples']}"
     assert results["config"]["no_attacks"] is True
     _cleanup()
+
+
+def test_predict_batch_halves_batch_on_oom():
+    # first chunk OOMs -> batch halves, same texts retried, all processed
+    calls = []
+
+    def fake_chunk(model, tokenizer, chunk, device):
+        calls.append(len(chunk))
+        if len(calls) == 1:
+            raise _OOM()
+        return [1] * len(chunk), [0.9] * len(chunk)
+
+    mod._predict_chunk = fake_chunk
+    mod.predict_batch = _REAL_PREDICT_BATCH  # undo the _install_stubs() lambda
+    preds, probs = mod.predict_batch(_FakeDetector(), ["x"] * 100, batch_size=32)
+    assert calls[0] == 32, f"first chunk {calls[0]} != 32"
+    assert max(calls[1:]) <= 16, f"post-OOM chunks not halved: {calls}"
+    assert sum(calls[1:]) == 100, f"processed {sum(calls[1:])} != 100: {calls}"
+    assert len(preds) == len(probs) == 100
 
 
 if __name__ == "__main__":
