@@ -37,6 +37,29 @@ the script kept running. The class-balance guard in `scripts/eval_essays.py`
 exists to prevent that. Pangram reports near-zero false positive rates at
 high accuracy; closing the gap needs more data and more epochs.
 
+## Results on RAID
+
+The essay benchmark tests in-domain text. RAID tests text the model never
+saw: 11 generator models, 11 domains, and 11 adversarial attacks. The table
+shows RAID runs from 2026-08-18, 5,000 human and 5,000 AI samples each,
+essay domains only.
+
+| Metric | Clean (no attacks) | With attacks |
+|---|---|---|
+| Accuracy | 84.1% | 76.4% |
+| Precision | 87.2% | 74.7% |
+| Recall (AI text detected) | 80.0% | 80.0% |
+| F1 score | 0.8345 | 0.7726 |
+| ROC-AUC | 0.892 | 0.810 |
+
+Two findings stand out. First, the clean RAID run (ROC-AUC 0.89) lands close
+to the in-domain essay run (0.93). The model separates human from AI text
+across generators it never trained on. Second, adversarial attacks cost
+about 8 points of ROC-AUC and roughly double the false positive rate on
+human text (about 12% clean, about 27% attacked, at the same 80% recall,
+derived from precision and recall). Every detector without adversarial
+training has this weak spot; it is the gap Pangram sells against.
+
 ## How it works
 
 ![Training pipeline](pangram-pipeline.png)
@@ -134,8 +157,8 @@ evaluate.py  evaluation entry point
 
 ## Limitations
 
-- At the default threshold, the model misses 17% of AI text and flags 12% of
-  human text as AI.
+- At the default threshold, the model misses 20% of AI text and flags about
+  12% of human text as AI; adversarial attacks raise that to about 27%.
 - Training text comes from encyclopedic and academic sources. Informal text
   (chat, social media) will score differently.
 - Adversarial robustness is not measured. The RAID harness exists; recorded
