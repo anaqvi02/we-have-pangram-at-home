@@ -89,6 +89,34 @@ ESSAY_DOMAINS = [
 # EVALUATION FUNCTIONS
 # =============================================================================
 
+class _ChainedRaid:
+    """Lazy concatenation of the RAID train and extra splits with .filter().
+
+    Humans in RAID are labeled model="human" and live in the extra split.
+    Loading only train means a run can never see a human sample. This wrapper
+    chains both splits and applies filters lazily so streaming stays cheap.
+    """
+    def __init__(self, parts):
+        self.parts = list(parts)
+
+    def filter(self, fn):
+        return _ChainedRaid(
+            ((x for x in part if fn(x)) for part in self.parts))
+
+    def __iter__(self):
+        for part in self.parts:
+            yield from part
+
+    def __len__(self):
+        return sum(len(part) for part in self.parts)
+
+
+def _is_ai_sample(sample):
+    """RAID labels humans with model="human" (padding rows use None)."""
+    m = sample.get('model')
+    return m is not None and m != 'human'
+
+
 def load_model(model_path: str) -> Tuple[PangramDetector, torch.nn.Module]:
     """Load the trained model from checkpoint."""
     print(f"Loading model from {model_path}...")
@@ -176,19 +204,28 @@ def evaluate_subset(
     labels = []
     metadata = []
     
-    # Collect samples
+    # Collect samples. With a sample cap, collect a balanced subset (half per
+    # class) so dataset ordering cannot turn the run single-class: RAID stores
+    # AI rows before most human rows, so the first N streamed samples are all
+    # AI and a naive cap never reaches a human.
+    quota = max_samples // 2 if max_samples else None
+    counts = {0: 0, 1: 0}
     for i, sample in enumerate(tqdm(dataset, desc=f"Loading {desc}")):
-        if max_samples and i >= max_samples:
+        if max_samples and len(texts) >= max_samples:
             break
         
         text = sample.get('generation', '')
         if not text or len(text.strip()) < 50:
             continue
         
+        is_ai = _is_ai_sample(sample)
+        label = 1 if is_ai else 0
+        if quota is not None and counts[label] >= quota:
+            # class quota full; keep streaming to find the other class
+            continue
+        counts[label] += 1
         texts.append(text)
-        # RAID: if model is None, it's human-written
-        is_ai = sample.get('model') is not None
-        labels.append(1 if is_ai else 0)
+        labels.append(label)
         metadata.append({
             'model': sample.get('model'),
             'domain': sample.get('domain'),
@@ -311,10 +348,16 @@ def run_full_evaluation(
     # Use streaming mode when max_samples is specified to avoid downloading entire dataset
     if max_samples:
         print(f"   Using streaming mode (max_samples={max_samples:,})")
-        raid = load_dataset("liamdugan/raid", split="train", streaming=True)
+        raid = _ChainedRaid([
+            load_dataset("liamdugan/raid", split="train", streaming=True),
+            load_dataset("liamdugan/raid", split="extra", streaming=True),
+        ])
         print(f"   Streaming enabled - will process up to {max_samples:,} samples")
     else:
-        raid = load_dataset("liamdugan/raid", split="train")
+        raid = _ChainedRaid([
+            load_dataset("liamdugan/raid", split="train"),
+            load_dataset("liamdugan/raid", split="extra"),
+        ])
         print(f"   Total samples: {len(raid):,}")
     
     
@@ -323,20 +366,23 @@ def run_full_evaluation(
     
     # Filter to specified domains/models
     if domains:
-        raid = raid.filter(lambda x: x.get('domain') in domains)
+        raid = raid.filter(
+            lambda x: _is_ai_sample(x) or x.get('domain') in domains)
         if not is_streaming:
             print(f"   After domain filter: {len(raid):,}")
         else:
             print(f"   Filtering to domains: {', '.join(domains)}")
     elif essays_only:
-        raid = raid.filter(lambda x: x.get('domain') in ESSAY_DOMAINS)
+        raid = raid.filter(
+            lambda x: _is_ai_sample(x) or x.get('domain') in ESSAY_DOMAINS)
         if not is_streaming:
             print(f"   After essay-only filter: {len(raid):,}")
         print(f"   (Domains: {', '.join(ESSAY_DOMAINS)})")
     
     if models:
-        # Include both AI samples from specified models AND human samples (model=None)
-        raid = raid.filter(lambda x: x.get('model') in models or x.get('model') is None)
+        # Include AI samples from the specified generators AND human samples
+        raid = raid.filter(
+            lambda x: not _is_ai_sample(x) or x.get('model') in models)
         if not is_streaming:
             print(f"   After model filter: {len(raid):,}")
 
@@ -425,7 +471,7 @@ def run_full_evaluation(
         
         eval_models = models or RAID_MODELS
         # Filter to AI samples only for by-model evaluation
-        ai_only = raid.filter(lambda x: x.get('model') is not None)
+        ai_only = raid.filter(lambda x: _is_ai_sample(x))
         by_model = evaluate_by_dimension(
             detector, ai_only, 'model', eval_models,
             max_samples_per_value=max_samples // len(eval_models) if max_samples else 2000,

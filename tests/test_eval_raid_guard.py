@@ -93,18 +93,29 @@ class FakeRaid:
         return FakeRaid([s for s in self.samples if fn(s)])
     def __iter__(self):
         return iter(self.samples)
+    def __len__(self):
+        return len(self.samples)
 
 
 def _sample(is_human):
     return {
         "generation": "x" * 200,
-        "model": None if is_human else "chatgpt",
+        # RAID reality: humans are labeled model="human" (string!), and
+        # humans live in the extra split. Padding rows use None.
+        "model": "human" if is_human else "chatgpt",
         "domain": "news",
         # RAID semantics: humans carry attack=None, clean AI carries
         # attack="none", attacked AI carries the attack name.
         "attack": None if is_human else "none",
         "decoding": "sample",
     }
+
+
+def _loader(train=None, extra=None):
+    """Split-aware load_dataset stub: run_full_evaluation loads both splits."""
+    def load(*args, split=None, **kwargs):
+        return FakeRaid(train if split == "train" else extra)
+    return load
 
 
 def _install_stubs():
@@ -124,7 +135,7 @@ def test_syntax():
 
 def test_ai_only_overall_exits():
     _install_stubs()
-    mod.load_dataset = lambda *a, **k: FakeRaid([_sample(False) for _ in range(20)])
+    mod.load_dataset = _loader(train=[_sample(False) for _ in range(20)])
     try:
         mod.run_full_evaluation(model_path="dummy", max_samples=100, output_dir="/tmp")
     except SystemExit as e:
@@ -135,7 +146,8 @@ def test_ai_only_overall_exits():
 
 def test_human_only_overall_exits():
     _install_stubs()
-    mod.load_dataset = lambda *a, **k: FakeRaid([_sample(True) for _ in range(20)])
+    # humans only come from the extra split here
+    mod.load_dataset = _loader(extra=[_sample(True) for _ in range(20)])
     try:
         mod.run_full_evaluation(model_path="dummy", max_samples=100, output_dir="/tmp")
     except SystemExit as e:
@@ -147,7 +159,7 @@ def test_human_only_overall_exits():
 def test_balanced_overall_proceeds():
     _install_stubs()
     samples = [_sample(i % 2 == 0) for i in range(20)]  # 10 human, 10 AI
-    mod.load_dataset = lambda *a, **k: FakeRaid(samples)
+    mod.load_dataset = _loader(train=samples)
     results = mod.run_full_evaluation(model_path="dummy", max_samples=100, output_dir="/tmp")
     overall = results["overall"]
     assert overall["human_samples"] == 10, f"expected 10 human, got {overall['human_samples']}"
@@ -174,13 +186,43 @@ def test_no_attacks_filters_attacked_samples():
         s = _sample(False)
         s["attack"] = "homoglyph"
         samples.append(s)
-    mod.load_dataset = lambda *a, **k: FakeRaid(samples)
+    mod.load_dataset = _loader(train=samples)
     results = mod.run_full_evaluation(
         model_path="dummy", max_samples=100, output_dir="/tmp", no_attacks=True)
     overall = results["overall"]
     assert overall["ai_samples"] == 10, f"expected 10 clean AI, got {overall['ai_samples']}"
     assert overall["human_samples"] == 10, f"expected 10 human, got {overall['human_samples']}"
     assert results["config"]["no_attacks"] is True
+    _cleanup()
+
+
+def test_extra_split_provides_humans():
+    # train is all AI; humans live in extra. Both must load, or the run
+    # would be single-class (the 2026-08-18 streaming failure).
+    _install_stubs()
+    mod.load_dataset = _loader(
+        train=[_sample(False) for _ in range(20)],
+        extra=[_sample(True) for _ in range(20)])
+    results = mod.run_full_evaluation(
+        model_path="dummy", max_samples=100, output_dir="/tmp")
+    overall = results["overall"]
+    assert overall["human_samples"] == 20, f"expected 20 human, got {overall['human_samples']}"
+    assert overall["ai_samples"] == 20, f"expected 20 AI, got {overall['ai_samples']}"
+    _cleanup()
+
+
+def test_streaming_balance_ignores_order():
+    # RAID stores AI rows first; a naive cap on the first N streamed rows
+    # never reaches a human. Quotas must collect half per class instead.
+    _install_stubs()
+    mod.load_dataset = _loader(
+        train=[_sample(False) for _ in range(100)],
+        extra=[_sample(True) for _ in range(100)])
+    results = mod.run_full_evaluation(
+        model_path="dummy", max_samples=50, output_dir="/tmp")
+    overall = results["overall"]
+    assert overall["human_samples"] == 25, f"expected 25 human, got {overall['human_samples']}"
+    assert overall["ai_samples"] == 25, f"expected 25 AI, got {overall['ai_samples']}"
     _cleanup()
 
 
