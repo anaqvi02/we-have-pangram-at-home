@@ -8,7 +8,7 @@ bezier edges between them. X-position encodes the detector's confidence
 (hard negatives hug the axis), and human node size is the detector's own
 P(AI) score (bigger = harder negative).
 
-Fast: ~5 minutes on an A10G (only 60 human texts).
+Fast: ~5-7 minutes on an A10G at 1,000 human texts.
 
 Run it inside a Modal notebook (volumes attached, GPU selected in the
 sidebar) by pasting this file's contents into a cell, or:
@@ -107,7 +107,7 @@ def p_ai(texts, batch_size=16):
     return np.array(probs)
 
 # ----------------------------------------------------------------- humans
-n_humans, top_k = 60, 3
+n_humans, top_k = 1000, 3
 texts, src_names = [], []
 for src in HUMAN_SOURCES:
     t = load_source(src, n_humans)
@@ -184,7 +184,7 @@ def bezier(p0, p1, ctrl, n=32):
     t = np.linspace(0, 1, n)[:, None]
     return (1 - t) ** 2 * p0 + 2 * (1 - t) * t * ctrl + t ** 2 * p1
 
-fig, ax = plt.subplots(figsize=(13, 9), facecolor=BG)
+fig, ax = plt.subplots(figsize=(12, 12), facecolor=BG)
 ax.set_facecolor(BG)
 ax.set_xticks([])
 ax.set_yticks([])
@@ -206,21 +206,21 @@ for h, m, sim in pairs:
         col = np.array(mcolors.to_rgb(HUMAN_COLOR)) * (1 - t) + \
               np.array(mcolors.to_rgb(AI_COLOR)) * t
         segments.append([pts[i], pts[i + 1]])
-        seg_colors.append((*col, min(1.0, max(0.05, 0.08 + 0.4 * float(sim)))))
-ax.add_collection(LineCollection(segments, colors=seg_colors, lw=0.6, zorder=1))
+        seg_colors.append((*col, min(1.0, max(0.03, 0.05 + 0.3 * float(sim)))))
+ax.add_collection(LineCollection(segments, colors=seg_colors, lw=0.4, zorder=1))
 
 # human nodes (size = P(AI), the harder the bigger) with a soft glow
 hx = np.array([human_x[h] for h in range(len(texts))])
 hy = np.array([human_y[h] for h in range(len(texts))])
-sizes = np.array([60 + 180 * float(probs[h]) for h in range(len(texts))])
-ax.scatter(hx, hy, s=sizes * 4, c=HUMAN_COLOR, alpha=0.12, edgecolors="none", zorder=2)
-ax.scatter(hx, hy, s=sizes, c=HUMAN_COLOR, alpha=0.95, edgecolors="none", zorder=3)
+sizes = np.array([6 + 18 * float(probs[h]) for h in range(len(texts))])
+ax.scatter(hx, hy, s=sizes * 5, c=HUMAN_COLOR, alpha=0.10, edgecolors="none", zorder=2)
+ax.scatter(hx, hy, s=sizes, c=HUMAN_COLOR, alpha=0.9, edgecolors="none", zorder=3)
 
 # AI mirror nodes (reflections, uniform) with a soft glow
 mx = np.array([mirror_x[m] for m in mirror_ids])
 my = np.array([mirror_y[m] for m in mirror_ids])
-ax.scatter(mx, my, s=22 * 5, c=AI_COLOR, alpha=0.10, edgecolors="none", zorder=2)
-ax.scatter(mx, my, s=22, c=AI_COLOR, alpha=0.85, edgecolors="none", zorder=3)
+ax.scatter(mx, my, s=4 * 5, c=AI_COLOR, alpha=0.08, edgecolors="none", zorder=2)
+ax.scatter(mx, my, s=4, c=AI_COLOR, alpha=0.8, edgecolors="none", zorder=3)
 
 ax.set_xlim(-0.06, 1.06)
 ax.set_ylim(-3, len(texts) + 3)
