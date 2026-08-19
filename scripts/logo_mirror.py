@@ -108,6 +108,10 @@ def p_ai(texts, batch_size=16):
 
 # ----------------------------------------------------------------- humans
 n_humans, top_k = 1000, 3
+# True = y is random, so only x carries the confidence signal (no cone/bottle
+# shape). False = y is sorted by P(AI), which correlates with x and produces
+# the mirrored-cone silhouette.
+SHUFFLE_Y = False
 texts, src_names = [], []
 for src in HUMAN_SOURCES:
     t = load_source(src, n_humans)
@@ -164,7 +168,10 @@ assert pairs, "no pairs - index/corpus mismatch?"
 # model nearly reflected it across.
 rng = np.random.default_rng(42)
 order = np.argsort(probs, kind="stable")
-human_y = {h: rank + rng.uniform(-0.3, 0.3) for rank, h in enumerate(order)}
+if SHUFFLE_Y:
+    human_y = {h: rng.uniform(-0.5, len(texts) - 0.5) for h in range(len(texts))}
+else:
+    human_y = {h: rank + rng.uniform(-0.3, 0.3) for rank, h in enumerate(order)}
 
 def x_human(p):
     return 0.08 + 0.39 * float(p)  # 0.08 = sure human .. 0.47 = hard negative
