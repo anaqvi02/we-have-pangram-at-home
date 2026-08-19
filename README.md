@@ -20,7 +20,8 @@ The table shows the essay benchmark run from our latest training run (more
 details about dataset and models used below). The set holds 2,000 human and
 2,000 AI samples, all from sources the model never saw during training.
 
-![[Pasted image 20260819132851.png]]
+<img width="1488" height="669" alt="image" src="https://github.com/user-attachments/assets/a8001a81-feef-482b-87cf-2ebd3108f568" />
+
 
 
 The model does not come close to the established detectors, mainly due to
