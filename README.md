@@ -1,64 +1,71 @@
-# We Have Pangram at Home
+# AI Detector, Probably
 
-A from-scratch AI-text detector built with open models and open data. The
-project follows the approach in the Pangram technical report. It is also a
-record of a first attempt at training a language model, mistakes included.
+A custom-built AI detector using publicly available human and AI essay data,
+basing our approach on the approach in the Pangram technical report.
 
-The detector classifies text as human-written or AI-generated. It uses
-DeBERTa-v3-large, a transformer model from Microsoft. Training uses a
-curriculum loop: the model trains, finds hard examples, and adds them to the
-dataset.
+This is also our first attempt at LM training, so mistakes are included —
+but so are many lessons learned.
+
+Following Pangram's approach, we implemented techniques such as mining hard
+negatives, but with our own twist to save cost and time. Our best model used
+3 epochs, with a total training time of around 90 minutes.
+
+![Epoch 2 training log](training-log.png)
+
+Training ran on Modal cloud with an H100*.
 
 ## Results
 
-The table shows the essay benchmark run from 2026-08-18, the first run with
-a valid evaluation set. The set holds 2,000 human and 2,000 AI samples, all
-from sources the model never saw during training.
+The table shows the essay benchmark run from our latest training run (more
+details about dataset and models used below). The set holds 2,000 human and
+2,000 AI samples, all from sources the model never saw during training.
 
-| Metric | Value |
-|---|---|
-| Samples | 4,000 |
-| Accuracy | 85.4% |
-| Precision | 87.3% |
-| Recall (AI text detected) | 83.0% |
-| F1 score | 0.8506 |
-| ROC-AUC | 0.934 |
-| False positive rate (default threshold) | 12.1% |
+![Essay benchmark metrics](essay-results.png)
 
-The model detects 83% of AI text at the default threshold. It flags 12% of
-human text as AI. The ROC-AUC of 0.934 shows that the model ranks text well:
-you can move the threshold to trade recall against false positives. A lower
-false positive rate is possible, at the cost of catching less AI text.
+![Essay benchmark confusion matrix](essay-confusion-matrix.png)
 
-Context: the first recorded run (2026-01-31) looked better — 100% precision
-and 0% false positive rate. Those numbers were meaningless. The evaluation
-set contained no human samples because the human sources failed to load, and
-the script kept running. The class-balance guard in `scripts/eval_essays.py`
-exists to prevent that. Pangram reports near-zero false positive rates at
-high accuracy; closing the gap needs more data and more epochs.
+The model does not come close to the established detectors, mainly due to
+the messiness of the public data and our limited time. The detector could in
+theory have been much more accurate if the data were better filtered, as it
+still has a strong tendency to detect formality in some cases. This could be
+attributed to human datasets that contain less sophisticated writing (e.g.
+PERSUADE contains only 6th-12th grade writing).
+
+However, the good thing is the ROC-AUC of 0.934 shows that the model ranks
+text well, meaning you can move the threshold to trade recall against false
+positives. A lower false positive rate is possible, at the cost of catching
+less AI text, and vice versa if you desire higher detections.
+
+Pangram reports near-zero false positive rates at high accuracy; closing the
+gap needs more higher-quality data and more epochs.
+
+![Pangram vs ours](pangram-vs-ours.png)
+
+- Pangram technical report (the paper this project replicates): https://arxiv.org/abs/2402.14873
+- UChicago BFI study (FPR 0.1% / FNR 1%): https://bfi.uchicago.edu/wp-content/uploads/2025/09/BFI_WP_2025-116.pdf
+- UChicago explainer: https://bfi.uchicago.edu/insights/artificial-writing-and-automated-detection/
+- UMD human-detector study (90% on humanized text): https://arxiv.org/abs/2501.15654
+- VUB peer-reviewed study (97.5% detection / 0% FPR, as reported by Pangram): https://link.springer.com/article/10.1007/s40979-026-00226-w
+- Pangram's third-party evals roundup: https://www.pangram.com/blog/third-party-pangram-evals
 
 ## Results on RAID
 
 The essay benchmark tests in-domain text. RAID tests text the model never
 saw: 11 generator models, 11 domains, and 11 adversarial attacks. The table
-shows RAID runs from 2026-08-18, 5,000 human and 5,000 AI samples each,
-essay domains only.
+shows RAID runs for 5,000 human and 5,000 AI samples each, essay domains
+only.
 
-| Metric | Clean (no attacks) | With attacks |
-|---|---|---|
-| Accuracy | 84.1% | 76.4% |
-| Precision | 87.2% | 74.7% |
-| Recall (AI text detected) | 80.0% | 80.0% |
-| F1 score | 0.8345 | 0.7726 |
-| ROC-AUC | 0.892 | 0.810 |
+![RAID results, clean vs attacked](raid-results.png)
 
 Two findings stand out. First, the clean RAID run (ROC-AUC 0.89) lands close
 to the in-domain essay run (0.93). The model separates human from AI text
-across generators it never trained on. Second, adversarial attacks cost
-about 8 points of ROC-AUC and roughly double the false positive rate on
-human text (about 12% clean, about 27% attacked, at the same 80% recall,
-derived from precision and recall). Every detector without adversarial
-training has this weak spot; it is the gap Pangram sells against.
+quite steadily across generators it never trained on.
+
+Second, adversarial attacks cost about 8 points of ROC-AUC and roughly
+double the false positive rate on human text (about 12% clean, about 27%
+attacked, at the same 80% recall, derived from precision and recall). This
+is quite expected: detectors without adversarial training struggle, and ours
+is no exception.
 
 ## How it works
 
@@ -66,26 +73,74 @@ training has this weak spot; it is the gap Pangram sells against.
 
 The editable source of the diagram is `pangram-pipeline.excalidraw`.
 
-1. **Collect data.** `scripts/download_data.py` fetches open sources. Human
-   text comes from FineWeb-Edu, IvyPanda, and PERSUADE (via the Kaggle AI
-   Essays set). AI text comes from Cosmopedia, LMSYS, and the Kaggle AI
-   Essays set. The script writes parquet files to `data/human_corpus` and
-   `data/ai_corpus`.
+1. **Get data.** `scripts/download_data.py` fetches open sources and filters
+   through them for higher-quality data.
+
+   The human datasets: FineWeb-Edu, IvyPanda, and PERSUADE (via the Kaggle
+   AI Essays set).
+   The AI datasets: Cosmopedia, LMSYS, and the Kaggle AI Essays set.
+
+   As it fetches data from these sources it performs the following:
+   1. Rejects all code patterns, as well as template docs (such as legal
+      documents and reports). This is achieved through structural
+      anti-patterns (detecting import statements and such).
+   2. Filters for ideal text sizes: 200–5,000 words, ≥2 paragraphs, ≥5
+      sentences, avg sentence length 8–50 words. This avoids extremely basic
+      and simple human writing, which would cause the model to sway even
+      more toward detecting formality and complexity, and not whether the
+      text is AI-generated.
+   3. Blocks casual AI chat via sentence variation (essays have varied
+      lengths, chat doesn't).
+   4. Applies strict mode for chat-sourced data, since we do use sources
+      from the LMSYS dataset: ≥3 paragraphs, variation ≥3, formality score
+      ≥2, because raw chatbot logs are not essays. Also enables optional
+      formality indicators ("this essay", "thesis", "perspective"...).
+
+Full requirements:
+
+| source | label | filter params | formality |
+|---|---|---|---|
+| fineweb_edu | human | 300–4000 words, ≥3 paragraphs | no |
+| cosmopedia_stanford | AI | 300–4000 words, ≥3 paragraphs | no |
+| cosmopedia_web_samples_v2 | AI | 250–4000 words, ≥2 paragraphs ("slightly more lenient") | no |
+| lmsys | AI | 250–3000 words, ≥3 paragraphs | yes |
+| ivypanda | human | — | not filtered at all |
+| kaggle AI essays (+PERSUADE) | both | — | not filtered at all |
+
+After that the script writes parquet files to `data/human_corpus` and
+`data/ai_corpus`.
+
 2. **Build an index.** `scripts/build_index.py` embeds the AI corpus with
-   MiniLM-L6-v2 and stores the vectors in a usearch index. The index provides
-   nearest-neighbor search over AI text.
+   MiniLM-L6-v2 and stores the vectors in a usearch index. The index
+   provides nearest-neighbor search over AI text. This allows us to skip
+   generating live AI mirrors of human text for the hard negative mining;
+   instead, we can just search for a text that is already available and
+   semantically similar. This cuts down on cost and speeds up training.
+
 3. **Train.** `train.py` runs the curriculum loop:
-   - Train DeBERTa-v3-large on the current set.
-   - Evaluate on the validation split.
-   - Mine hard negatives: run the model over the held-out human pool, then
-     take the samples the model most likely calls AI. These are potential
-     false positives.
-   - Retrieve the nearest AI mirrors for those samples from the index. Add
-     the pairs to the training set.
-   - Repeat. Checkpoints resume automatically.
+   1. Train DeBERTa-v3-large on the current set.
+   2. Evaluate on the validation split.
+   3. Mine hard negatives: run the model over the held-out human pool, then
+      take the samples the model most likely calls AI. These are potential
+      false positives.
+   4. Retrieve the nearest AI mirrors for those samples from the index. Add
+      the pairs to the training set.
+   5. Repeat. Checkpoints resume automatically.
+
 4. **Evaluate.** Three scripts cover three benchmarks: `evaluate.py` (FPR at
    95% recall), `scripts/eval_essays.py` (held-out essay sets), and
    `scripts/eval_raid.py` (the RAID benchmark).
+
+Training results: after 3 epochs of training, the model reached a
+considerably good in-domain validation of 99.875% and starts to plateau in
+its improvements. Train loss also looks healthy as the model fits the
+dataset better during each epoch.
+
+We can also see the hard negative cycle at work as the dataset continues to
+grow, as the model discovers ~100k hard-negative pairs that are added to the
+training set per round.
+
+![Curriculum training curves](training-curve.png)
 
 ## Quick start
 
@@ -120,10 +175,10 @@ The download is about 2.5 GB. Training uses MPS on Apple Silicon by default;
 **Pangram, Technical Report on the Pangram AI-generated Text Classifier**
 (https://www.pangram.com/research/papers).
 
-The project borrows the transformer detector design, the hard-negative mining
-loop, and the FPR-at-high-recall metric. It differs in model and data:
-DeBERTa-v3-large is open, the corpora are open, and the scale is smaller. The
-whole run fits on one laptop or one Modal job.
+The project borrows the transformer detector design, the hard-negative
+mining loop, and the FPR-at-high-recall metric. It differs in model and
+data: DeBERTa-v3-large is open, the corpora are open, and the scale is
+smaller.
 
 Datasets and benchmarks used, all open: FineWeb-Edu, IvyPanda essays,
 Cosmopedia, LMSYS-Chat-1M (Hugging Face), and the AI-vs-Human-Text set incl.
@@ -164,6 +219,6 @@ evaluate.py  evaluation entry point
 - Adversarial robustness is not measured. The RAID harness exists; recorded
   results do not.
 
-## Author
+## Authors
 
-[anaqvi02](https://github.com/anaqvi02)
+[Peter Shao](https://github.com/Peteryhs) and [Ali Naqvi](https://github.com/anaqvi02)
