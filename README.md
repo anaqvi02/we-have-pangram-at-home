@@ -106,9 +106,11 @@ Full requirements:
 | lmsys | AI | 250–3000 words, ≥3 paragraphs | yes |
 | ivypanda | human | — | not filtered at all |
 | kaggle AI essays (+PERSUADE) | both | — | not filtered at all |
+
 A lot of work went into ensuring we can collect the required amount of data at the expected quality efficiently. Because sources like LMSYS require much stricter filtering, extracting good essay data from them is considerably harder. To solve this, a 4-Phase Dynamic Balancing Pipeline dynamically adjusts source quotas based on extraction difficulty. By sampling 5,000 examples per source to measure empirical acceptance yields, the pipeline calculates optimal quota allocations and download targets to maintain a diverse, balanced dataset.
 
-![[Pasted image 20260819150332.png]]
+<img width="671" height="425" alt="image" src="https://github.com/user-attachments/assets/118a91e9-1f43-4390-9d41-ae19328a97ea" />
+
 
 Final values, the set was very close to being balanced. 
 
