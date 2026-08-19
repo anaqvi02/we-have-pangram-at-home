@@ -1,14 +1,16 @@
 """
 Hard-negative mirror graph for the logo.
 
-Draws the retrieval pairs at the heart of the hard-negative mining as a
-mirror: human texts on the left half, their nearest AI "mirrors" from the
-usearch index reflected across a decision axis at x = 0.5, with gradient
-bezier edges between them. X-position encodes the detector's confidence
-(hard negatives hug the axis), and human node size is the detector's own
-P(AI) score (bigger = harder negative).
+Draws the retrieval pairs at the heart of the hard-negative mining:
+human texts on the left, their nearest AI "mirrors" from the usearch
+index on the right, with gradient bezier edges between them. Human
+x-position and node size encode the detector's own P(AI) (hard negatives
+hug the decision axis at x = 0.5). Mirrors are either reflected across
+that axis (MEASURED_MIRRORS=False) or placed at their own measured P(AI)
+(MEASURED_MIRRORS=True).
 
-Fast: ~5-7 minutes on an A10G at 1,000 human texts.
+~5-7 minutes on an A10G at 1,000 human texts (adds ~2-3 min when
+MEASURED_MIRRORS=True, which scores ~2,000 mirror texts).
 
 Run it inside a Modal notebook (volumes attached, GPU selected in the
 sidebar) by pasting this file's contents into a cell, or:
@@ -112,6 +114,11 @@ n_humans, top_k = 1000, 3
 # shape). False = y is sorted by P(AI), which correlates with x and produces
 # the mirrored-cone silhouette.
 SHUFFLE_Y = False
+# True = run the detector over the mirror texts too and place them at their
+# own measured P(AI) (breaks the symmetry; mirrors cluster near the right
+# edge). False = reflect the paired human's position across the axis (the
+# "mirror" metaphor). Adds ~2-3 min of inference when True.
+MEASURED_MIRRORS = True
 texts, src_names = [], []
 for src in HUMAN_SOURCES:
     t = load_source(src, n_humans)
@@ -161,6 +168,11 @@ for h in range(len(texts)):
 print(f"{len(pairs)} pairs, {len(mirror_texts)} unique mirrors")
 assert pairs, "no pairs - index/corpus mismatch?"
 
+mirror_probs = None
+if MEASURED_MIRRORS:
+    print(f"scoring {len(mirror_texts)} mirror texts with the detector ...")
+    mirror_probs = p_ai([mirror_texts[m] for m in mirror_texts])
+
 # ---------------------------------------------------------------- layout
 # The mirror metaphor: x-position = the model's confidence. Humans live on
 # the left half, their AI mirrors are reflected across the decision axis at
@@ -177,8 +189,15 @@ def x_human(p):
     return 0.08 + 0.39 * float(p)  # 0.08 = sure human .. 0.47 = hard negative
 
 human_x = {h: x_human(probs[h]) for h in range(len(texts))}
-mirror_x = {m: float(np.mean([1.0 - human_x[h] for h, mm, _ in pairs if mm == m]))
-            for m in mirror_texts}
+
+def x_mirror_measured(p):
+    return 0.53 + 0.39 * float(p)  # 0.53 = "maybe AI" .. 0.92 = "definitely AI"
+
+if MEASURED_MIRRORS:
+    mirror_x = {m: x_mirror_measured(mirror_probs[m]) for m in mirror_texts}
+else:
+    mirror_x = {m: float(np.mean([1.0 - human_x[h] for h, mm, _ in pairs if mm == m]))
+                for m in mirror_texts}
 mirror_y = {m: float(np.mean([human_y[h] for h, mm, _ in pairs if mm == m]))
             for m in mirror_texts}
 mirror_ids = sorted(mirror_texts, key=lambda m: mirror_y[m])
