@@ -1,9 +1,21 @@
+<div align="center">
+
 # AI Detector, Probably
 
-A custom-built AI detector using publicly available human and AI essay data,
-basing our approach on the approach in the Pangram technical report.
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Model](https://img.shields.io/badge/Model-DeBERTa--v3--large-FF6F00?style=flat-square&logo=huggingface&logoColor=white)](https://huggingface.co/microsoft/deberta-v3-large)
+[![ROC-AUC](https://img.shields.io/badge/ROC--AUC-0.934-00b894?style=flat-square)](#results)
+[![Compute](https://img.shields.io/badge/Trained%20on-Modal%20H100-0984e3?style=flat-square)](https://modal.com/)
 
-This is also our first attempt at LM training, so mistakes are included —
+<p align="center">
+  A custom-built AI detector using publicly available human and AI essay data,<br>
+  basing our approach on the <a href="https://arxiv.org/abs/2402.14873">Pangram technical report</a>.
+</p>
+
+</div>
+
+This is also our first attempt at LM training, so mistakes are included
 but so are many lessons learned.
 
 Following Pangram's approach, we implemented techniques such as mining hard
