@@ -20,9 +20,8 @@ The table shows the essay benchmark run from our latest training run (more
 details about dataset and models used below). The set holds 2,000 human and
 2,000 AI samples, all from sources the model never saw during training.
 
-![Essay benchmark metrics](essay-results.png)
+![[Pasted image 20260819132851.png]]
 
-![Essay benchmark confusion matrix](essay-confusion-matrix.png)
 
 The model does not come close to the established detectors, mainly due to
 the messiness of the public data and our limited time. The detector could in
