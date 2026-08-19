@@ -1,10 +1,12 @@
 """
 Hard-negative mirror graph for the logo.
 
-Draws the retrieval pairs at the heart of the hard-negative mining:
-human texts on the left, their nearest AI "mirrors" from the usearch
-index on the right, edges between them. Human node size = the
-detector's own P(AI) score (bigger = harder negative).
+Draws the retrieval pairs at the heart of the hard-negative mining as a
+mirror: human texts on the left half, their nearest AI "mirrors" from the
+usearch index reflected across a decision axis at x = 0.5, with gradient
+bezier edges between them. X-position encodes the detector's confidence
+(hard negatives hug the axis), and human node size is the detector's own
+P(AI) score (bigger = harder negative).
 
 Fast: ~5 minutes on an A10G (only 60 human texts).
 
@@ -156,28 +158,72 @@ print(f"{len(pairs)} pairs, {len(mirror_texts)} unique mirrors")
 assert pairs, "no pairs - index/corpus mismatch?"
 
 # ---------------------------------------------------------------- layout
-# Humans sorted by P(AI): the hardest (most AI-looking) sit in the middle.
+# The mirror metaphor: x-position = the model's confidence. Humans live on
+# the left half, their AI mirrors are reflected across the decision axis at
+# x = 0.5. A hard negative (P(AI) near 1) sits right next to the axis - the
+# model nearly reflected it across.
 rng = np.random.default_rng(42)
 order = np.argsort(probs, kind="stable")
-human_y = {h: rank + rng.uniform(-0.25, 0.25) for rank, h in enumerate(order)}
-mirror_y = {m: float(np.mean([human_y[h] for h, mm, _ in pairs if mm == m])) for m in mirror_texts}
+human_y = {h: rank + rng.uniform(-0.3, 0.3) for rank, h in enumerate(order)}
+
+def x_human(p):
+    return 0.08 + 0.39 * float(p)  # 0.08 = sure human .. 0.47 = hard negative
+
+human_x = {h: x_human(probs[h]) for h in range(len(texts))}
+mirror_x = {m: float(np.mean([1.0 - human_x[h] for h, mm, _ in pairs if mm == m]))
+            for m in mirror_texts}
+mirror_y = {m: float(np.mean([human_y[h] for h, mm, _ in pairs if mm == m]))
+            for m in mirror_texts}
 mirror_ids = sorted(mirror_texts, key=lambda m: mirror_y[m])
 
 # ------------------------------------------------------------------ plot
-fig, ax = plt.subplots(figsize=(12, 9), facecolor=BG)
+import matplotlib.colors as mcolors
+from matplotlib.collections import LineCollection
+
+def bezier(p0, p1, ctrl, n=32):
+    t = np.linspace(0, 1, n)[:, None]
+    return (1 - t) ** 2 * p0 + 2 * (1 - t) * t * ctrl + t ** 2 * p1
+
+fig, ax = plt.subplots(figsize=(13, 9), facecolor=BG)
 ax.set_facecolor(BG)
 ax.set_xticks([])
 ax.set_yticks([])
 for s in ax.spines.values():
     s.set_visible(False)
+
+# the decision axis: where a text "reflects" from human to AI
+ax.axvline(0.5, color="#555555", lw=1.0, ls=(0, (4, 4)), alpha=0.55, zorder=0)
+
+# edges: bezier arcs that fade from human-blue to AI-orange along the way
+segments, seg_colors = [], []
 for h, m, sim in pairs:
-    ax.plot([0, 1], [human_y[h], mirror_y[m]], color="#888888", lw=0.6,
-            alpha=0.15 + 0.55 * sim, zorder=1)
-ax.scatter([0.0] * len(texts), [human_y[h] for h in range(len(texts))],
-           s=[60 + 140 * float(probs[h]) for h in range(len(texts))],
-           c=HUMAN_COLOR, alpha=0.9, edgecolors="none", zorder=2)
-ax.scatter([1.0] * len(mirror_ids), [mirror_y[m] for m in mirror_ids],
-           s=22, c=AI_COLOR, alpha=0.7, edgecolors="none", zorder=2)
+    p0 = np.array([human_x[h], human_y[h]])
+    p1 = np.array([mirror_x[m], mirror_y[m]])
+    ctrl = np.array([(p0[0] + p1[0]) / 2, max(p0[1], p1[1]) + 0.6])
+    pts = bezier(p0, p1, ctrl)
+    for i in range(len(pts) - 1):
+        t = i / (len(pts) - 1)
+        col = np.array(mcolors.to_rgb(HUMAN_COLOR)) * (1 - t) + \
+              np.array(mcolors.to_rgb(AI_COLOR)) * t
+        segments.append([pts[i], pts[i + 1]])
+        seg_colors.append((*col, min(1.0, max(0.05, 0.08 + 0.4 * float(sim)))))
+ax.add_collection(LineCollection(segments, colors=seg_colors, lw=0.6, zorder=1))
+
+# human nodes (size = P(AI), the harder the bigger) with a soft glow
+hx = np.array([human_x[h] for h in range(len(texts))])
+hy = np.array([human_y[h] for h in range(len(texts))])
+sizes = np.array([60 + 180 * float(probs[h]) for h in range(len(texts))])
+ax.scatter(hx, hy, s=sizes * 4, c=HUMAN_COLOR, alpha=0.12, edgecolors="none", zorder=2)
+ax.scatter(hx, hy, s=sizes, c=HUMAN_COLOR, alpha=0.95, edgecolors="none", zorder=3)
+
+# AI mirror nodes (reflections, uniform) with a soft glow
+mx = np.array([mirror_x[m] for m in mirror_ids])
+my = np.array([mirror_y[m] for m in mirror_ids])
+ax.scatter(mx, my, s=22 * 5, c=AI_COLOR, alpha=0.10, edgecolors="none", zorder=2)
+ax.scatter(mx, my, s=22, c=AI_COLOR, alpha=0.85, edgecolors="none", zorder=3)
+
+ax.set_xlim(-0.06, 1.06)
+ax.set_ylim(-3, len(texts) + 3)
 fig.savefig(out_dir / "mirror_graph.png", dpi=300, bbox_inches="tight", facecolor=BG)
 plt.show()
 
