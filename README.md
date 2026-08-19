@@ -73,7 +73,7 @@ is no exception.
 
 The editable source of the diagram is `pangram-pipeline.excalidraw`.
 
-1. **Get data.** `scripts/download_data.py` fetches open sources and filters
+1. **Get data.** `scripts/download_data_v5.py` fetches open sources and filters
    through them for higher-quality data.
 
    The human datasets: FineWeb-Edu, IvyPanda, and PERSUADE (via the Kaggle
@@ -81,17 +81,17 @@ The editable source of the diagram is `pangram-pipeline.excalidraw`.
    The AI datasets: Cosmopedia, LMSYS, and the Kaggle AI Essays set.
 
    As it fetches data from these sources it performs the following:
-   1. Rejects all code patterns, as well as template docs (such as legal
+   2. Rejects all code patterns, as well as template docs (such as legal
       documents and reports). This is achieved through structural
       anti-patterns (detecting import statements and such).
-   2. Filters for ideal text sizes: 200–5,000 words, ≥2 paragraphs, ≥5
+   3. Filters for ideal text sizes: 200–5,000 words, ≥2 paragraphs, ≥5
       sentences, avg sentence length 8–50 words. This avoids extremely basic
       and simple human writing, which would cause the model to sway even
       more toward detecting formality and complexity, and not whether the
       text is AI-generated.
-   3. Blocks casual AI chat via sentence variation (essays have varied
+   4. Blocks casual AI chat via sentence variation (essays have varied
       lengths, chat doesn't).
-   4. Applies strict mode for chat-sourced data, since we do use sources
+   5. Applies strict mode for chat-sourced data, since we do use sources
       from the LMSYS dataset: ≥3 paragraphs, variation ≥3, formality score
       ≥2, because raw chatbot logs are not essays. Also enables optional
       formality indicators ("this essay", "thesis", "perspective"...).
@@ -106,6 +106,11 @@ Full requirements:
 | lmsys | AI | 250–3000 words, ≥3 paragraphs | yes |
 | ivypanda | human | — | not filtered at all |
 | kaggle AI essays (+PERSUADE) | both | — | not filtered at all |
+A lot of work went into ensuring we can collect the required amount of data at the expected quality efficiently. Because sources like LMSYS require much stricter filtering, extracting good essay data from them is considerably harder. To solve this, a 4-Phase Dynamic Balancing Pipeline dynamically adjusts source quotas based on extraction difficulty. By sampling 5,000 examples per source to measure empirical acceptance yields, the pipeline calculates optimal quota allocations and download targets to maintain a diverse, balanced dataset.
+
+![[Pasted image 20260819150332.png]]
+
+Final values, the set was very close to being balanced. 
 
 After that the script writes parquet files to `data/human_corpus` and
 `data/ai_corpus`.
