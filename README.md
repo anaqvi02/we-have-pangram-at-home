@@ -1,6 +1,8 @@
 <div align="center">
+<img width="962" height="234" alt="image" src="https://github.com/user-attachments/assets/eb7fedb4-1bc5-4a13-be2f-cda69edeef55" />
 
-# AI Detector, Probably
+
+---
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org/)
