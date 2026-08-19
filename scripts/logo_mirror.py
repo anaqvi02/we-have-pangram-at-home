@@ -168,7 +168,7 @@ for h in range(len(texts)):
 print(f"{len(pairs)} pairs, {len(mirror_texts)} unique mirrors")
 assert pairs, "no pairs - index/corpus mismatch?"
 
-mirror_probs = None
+mirror_probs = np.array([])
 if MEASURED_MIRRORS:
     print(f"scoring {len(mirror_texts)} mirror texts with the detector ...")
     mirror_probs = p_ai([mirror_texts[m] for m in mirror_texts])
@@ -190,11 +190,14 @@ def x_human(p):
 
 human_x = {h: x_human(probs[h]) for h in range(len(texts))}
 
-def x_mirror_measured(p):
-    return 0.53 + 0.39 * float(p)  # 0.53 = "maybe AI" .. 0.92 = "definitely AI"
-
 if MEASURED_MIRRORS:
-    mirror_x = {m: x_mirror_measured(mirror_probs[m]) for m in mirror_texts}
+    # Measured P(AI) saturates near 1 for AI text (almost every mirror scores
+    # ~0.99+), so a linear x-map collapses the whole orange side into a flat
+    # line. Spread mirrors across the right half by their RANK in P(AI)
+    # instead - keeps the ordering meaning while making the spread visible.
+    mirror_ids_by_p = sorted(mirror_texts, key=lambda m: mirror_probs[m])
+    n_mir = max(len(mirror_ids_by_p) - 1, 1)
+    mirror_x = {m: 0.53 + 0.39 * (rank / n_mir) for rank, m in enumerate(mirror_ids_by_p)}
 else:
     mirror_x = {m: float(np.mean([1.0 - human_x[h] for h, mm, _ in pairs if mm == m]))
                 for m in mirror_texts}
