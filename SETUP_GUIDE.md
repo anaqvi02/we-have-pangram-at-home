@@ -35,7 +35,7 @@ Some datasets (like `lmsys-chat-1m`) are gated and require authentication. Since
    ```
 
 ### Option A: Complete Download (HuggingFace + Kaggle)
-This will fetch ~200k samples per class from Wikipedia, arXiv, FineWeb-Edu (Human) and Cosmopedia, LMSYS, WildChat (AI), as well as PERSUADE and AI Essays from Kaggle.
+This will fetch ~200k samples per class from FineWeb-Edu, IvyPanda (Human) and Cosmopedia, LMSYS (AI), as well as PERSUADE and AI Essays from Kaggle.
 
 ```bash
 python scripts/download_data.py --target 200000

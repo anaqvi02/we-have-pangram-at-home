@@ -67,10 +67,10 @@ training has this weak spot; it is the gap Pangram sells against.
 The editable source of the diagram is `pangram-pipeline.excalidraw`.
 
 1. **Collect data.** `scripts/download_data.py` fetches open sources. Human
-   text comes from Wikipedia, arXiv, and FineWeb-Edu. AI text comes from
-   Cosmopedia, LMSYS, and WildChat. Essay-style text comes from PERSUADE and
-   the Kaggle AI Essays set. The script writes parquet files to
-   `data/human_corpus` and `data/ai_corpus`.
+   text comes from FineWeb-Edu, IvyPanda, and PERSUADE (via the Kaggle AI
+   Essays set). AI text comes from Cosmopedia, LMSYS, and the Kaggle AI
+   Essays set. The script writes parquet files to `data/human_corpus` and
+   `data/ai_corpus`.
 2. **Build an index.** `scripts/build_index.py` embeds the AI corpus with
    MiniLM-L6-v2 and stores the vectors in a usearch index. The index provides
    nearest-neighbor search over AI text.
@@ -125,9 +125,9 @@ loop, and the FPR-at-high-recall metric. It differs in model and data:
 DeBERTa-v3-large is open, the corpora are open, and the scale is smaller. The
 whole run fits on one laptop or one Modal job.
 
-Datasets and benchmarks used, all open: WildChat (AllenAI), C4, Wikipedia,
-arXiv, FineWeb-Edu, Cosmopedia, LMSYS-Chat-1M (Hugging Face), PERSUADE 2.0
-and AI Essays (Kaggle). Evaluation uses HC3, GPT-wiki-intro, and RAID by
+Datasets and benchmarks used, all open: FineWeb-Edu, IvyPanda essays,
+Cosmopedia, LMSYS-Chat-1M (Hugging Face), and the AI-vs-Human-Text set incl.
+PERSUADE 2.0 (Kaggle). Evaluation uses HC3, GPT-wiki-intro, and RAID by
 Dugan et al.
 
 ## Repository layout
