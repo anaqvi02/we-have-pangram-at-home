@@ -1,5 +1,5 @@
 <div align="center">
-<img width="1370" height="256" alt="image" src="https://github.com/user-attachments/assets/af79524c-e11a-4b49-979d-af5c5077e59b" />
+<img width="1370" height="256" alt="AI Detector, Probably" src="https://github.com/user-attachments/assets/af79524c-e11a-4b49-979d-af5c5077e59b" />
 
 
 
