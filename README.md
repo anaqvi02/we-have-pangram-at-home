@@ -182,13 +182,42 @@ Set these environment variables first. Kaggle downloads need
 `KAGGLE_USERNAME` and `KAGGLE_KEY`. Gated Hugging Face sets need `HF_TOKEN`.
 
 ```bash
+# 1. Download & balance dataset (V5 Dynamic Balancer)
 python scripts/download_data_v5.py --target 200000
+
+# 2. Build nearest-neighbor vector index for AI corpus
 python scripts/build_index.py
+
+# 3. Train DeBERTa-v3-large with curriculum hard-negative mining
 python train.py --epochs 3
+
+# 4. Run benchmarks (in-domain essay eval & out-of-domain RAID)
 python evaluate.py --model_path checkpoints/pangram_final
 python scripts/eval_essays.py --model_path checkpoints/pangram_final
 python scripts/eval_raid.py --model_path checkpoints/pangram_final
+
+# 5. Run interactive inference (test arbitrary text in real-time)
 python scripts/test_model.py --model_path checkpoints/pangram_final
+```
+
+### Interactive Inference
+
+You can test custom text against any saved checkpoint using the interactive inference CLI:
+
+```bash
+python scripts/test_model.py --model_path checkpoints/pangram_final
+```
+
+Example prompt:
+```text
+--- 🤖 Pangram AI Detector Test ---
+Enter text to analyze (Ctrl+C to exit).
+---------------------------------------
+
+📝 Enter text: In conclusion, the economic impact of renewable energy transitions...
+
+Result: 🤖 AI-GENERATED
+Confidence: 0.9412 [██████████████████░░]
 ```
 
 The download is about 2.5 GB. Training uses MPS on Apple Silicon by default;
