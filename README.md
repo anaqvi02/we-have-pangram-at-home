@@ -208,19 +208,7 @@ You can test custom text against any saved checkpoint using the interactive infe
 python scripts/test_model.py --model_path checkpoints/pangram_final
 ```
 
-Example prompt:
-```text
---- 🤖 Pangram AI Detector Test ---
-Enter text to analyze (Ctrl+C to exit).
----------------------------------------
-
-📝 Enter text: In conclusion, the economic impact of renewable energy transitions...
-
-Result: 🤖 AI-GENERATED
-Confidence: 0.9412 [██████████████████░░]
-```
-
-The download is about 2.5 GB. Training uses MPS on Apple Silicon by default;
+Training uses MPS on Apple Silicon by default;
 `FORCE_CPU=1` forces CPU. `src/config.py` holds the rest of the knobs
 (context length 512, learning rate 1e-5, batch size by VRAM class).
 
