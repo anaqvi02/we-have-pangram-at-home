@@ -93,17 +93,17 @@ The editable source of the diagram is `pangram-pipeline.excalidraw`.
    The AI datasets: Cosmopedia, LMSYS, and the Kaggle AI Essays set.
 
    As it fetches data from these sources it performs the following:
-   2. Rejects all code patterns, as well as template docs (such as legal
+   1. Rejects all code patterns, as well as template docs (such as legal
       documents and reports). This is achieved through structural
       anti-patterns (detecting import statements and such).
-   3. Filters for ideal text sizes: 200–5,000 words, ≥2 paragraphs, ≥5
+   2. Filters for ideal text sizes: 200–5,000 words, ≥2 paragraphs, ≥5
       sentences, avg sentence length 8–50 words. This avoids extremely basic
       and simple human writing, which would cause the model to sway even
       more toward detecting formality and complexity, and not whether the
       text is AI-generated.
-   4. Blocks casual AI chat via sentence variation (essays have varied
+   3. Blocks casual AI chat via sentence variation (essays have varied
       lengths, chat doesn't).
-   5. Applies strict mode for chat-sourced data, since we do use sources
+   4. Applies strict mode for chat-sourced data, since we do use sources
       from the LMSYS dataset: ≥3 paragraphs, variation ≥3, formality score
       ≥2, because raw chatbot logs are not essays. Also enables optional
       formality indicators ("this essay", "thesis", "perspective"...).
@@ -146,9 +146,12 @@ After that the script writes parquet files to `data/human_corpus` and
       the pairs to the training set.
    5. Repeat. Checkpoints resume automatically.
 
-4. **Evaluate.** Three scripts cover three benchmarks: `evaluate.py` (FPR at
-   95% recall), `scripts/eval_essays.py` (held-out essay sets), and
-   `scripts/eval_raid.py` (the RAID benchmark).
+4. **Evaluate and infer.**
+   - **Benchmarks:** Three scripts cover three benchmarks: `evaluate.py` (FPR at
+     95% recall), `scripts/eval_essays.py` (held-out essay sets), and
+     `scripts/eval_raid.py` (the RAID benchmark).
+   - **Interactive inference:** `scripts/test_model.py` loads any trained checkpoint
+     and launches an interactive terminal prompt to test arbitrary text in real-time.
 
 Training results: after 3 epochs of training, the model reached a
 considerably good in-domain validation of 99.875% and starts to plateau in
@@ -176,13 +179,13 @@ Set these environment variables first. Kaggle downloads need
 `KAGGLE_USERNAME` and `KAGGLE_KEY`. Gated Hugging Face sets need `HF_TOKEN`.
 
 ```bash
-python scripts/download_data.py --target 200000
-python scripts/verify_quick.py
+python scripts/download_data_v5.py --target 200000
 python scripts/build_index.py
 python train.py --epochs 3
 python evaluate.py --model_path checkpoints/pangram_final
 python scripts/eval_essays.py --model_path checkpoints/pangram_final
 python scripts/eval_raid.py --model_path checkpoints/pangram_final
+python scripts/test_model.py --model_path checkpoints/pangram_final
 ```
 
 The download is about 2.5 GB. Training uses MPS on Apple Silicon by default;
@@ -207,7 +210,7 @@ Dugan et al.
 ## Repository layout
 
 ```
-scripts/     data download, index build, evaluation
+scripts/     data download (v5 dynamic balancer), index build, evaluation, inference
 src/         config, model, data loading, mining, trainer
 notebooks/   cloud training notebook (Modal)
 tests/       benchmark fixtures
