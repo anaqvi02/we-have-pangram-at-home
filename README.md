@@ -258,8 +258,6 @@ evaluate.py  evaluation entry point
   12% of human text as AI; adversarial attacks raise that to about 27%.
 - Training text comes from encyclopedic and academic sources. Informal text
   (chat, social media) will score differently.
-- Adversarial robustness is not measured. The RAID harness exists; recorded
-  results do not.
 
 ## Authors
 
